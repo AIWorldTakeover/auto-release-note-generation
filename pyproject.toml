@@ -139,7 +139,7 @@ select = [
 ]
 
 ignore = [
-    "E501",     # Line too long (handled by formatter)
+    # "E501",     # Line too long (handled by formatter)
     "RUF012",   # Mutable class attributes should be annotated with ClassVar
 ]
 
