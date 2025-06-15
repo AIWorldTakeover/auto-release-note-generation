@@ -80,9 +80,19 @@ class HypothesisStrategies:
     )
 
     # Invalid data strategies
-    invalid_names = st.one_of(st.just(""), st.text(min_size=256), st.just("   "))
+    invalid_names = st.one_of(
+        st.just(""),
+        st.text(min_size=256).filter(lambda x: len(x.strip()) > 255),
+        st.just("   "),
+    )
 
-    invalid_emails = st.one_of(st.just(""), st.text(min_size=321), st.just("   "))
+    invalid_emails = st.one_of(
+        st.just(""),  # Empty string
+        st.text(min_size=321).filter(
+            lambda x: len(x.strip()) > 320
+        ),  # Too long after stripping
+        st.just("   "),  # Whitespace only
+    )
 
     # GitSHA strategies
     valid_git_shas = st.text(
@@ -129,10 +139,17 @@ class HypothesisStrategies:
     # GPG signature strategies
     valid_gpg_signatures = st.one_of(
         st.none(),
-        st.text(min_size=1).map(
-            lambda x: f"-----BEGIN PGP SIGNATURE-----\n{x}\n-----END PGP SIGNATURE-----"
+        st.text(min_size=1)
+        .filter(lambda x: x.strip())
+        .map(
+            lambda x: (
+                f"-----BEGIN PGP SIGNATURE-----\n{x.strip()}\n"
+                "-----END PGP SIGNATURE-----"
+            )
         ),
-        st.text(min_size=1).map(lambda x: f"gpgsig {x}"),
+        st.text(min_size=1)
+        .filter(lambda x: x.strip())
+        .map(lambda x: f"gpgsig {x.strip()}"),
     )
 
     invalid_gpg_signatures = st.one_of(
