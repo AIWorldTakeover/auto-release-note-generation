@@ -127,6 +127,71 @@ class TestChangeMetadataValidation:
         assert metadata.source_branches == ["feature/test"]
         assert metadata.target_branch == "main"
 
+    def test_invalid_source_branch_validation(self):
+        """Test that empty or whitespace-only source branches raise ValidationError."""
+        # Test empty string in source branches
+        with pytest.raises(
+            ValidationError, match="Source branch names must be non-empty strings"
+        ):
+            ChangeMetadata(
+                change_type="merge", source_branches=[""], target_branch="main"
+            )
+
+        # Test whitespace-only string in source branches
+        with pytest.raises(
+            ValidationError, match="Source branch names must be non-empty strings"
+        ):
+            ChangeMetadata(
+                change_type="merge", source_branches=["   "], target_branch="main"
+            )
+
+        # Test None in source branches (caught by pydantic type validation)
+        with pytest.raises(ValidationError):
+            ChangeMetadata(
+                change_type="merge",
+                source_branches=[None],  # type: ignore
+                target_branch="main",
+            )
+
+    def test_is_octopus_change_method(self):
+        """Test the is_octopus_change() method for various change types."""
+        # Test octopus merge with multiple branches
+        octopus_metadata = ChangeMetadata(
+            change_type="octopus",
+            source_branches=["branch1", "branch2", "branch3"],
+            target_branch="main",
+        )
+        assert octopus_metadata.is_octopus_change() is True
+
+        # Test octopus merge with exactly 2 branches (minimum for octopus)
+        octopus_min = ChangeMetadata(
+            change_type="octopus",
+            source_branches=["branch1", "branch2"],
+            target_branch="main",
+        )
+        assert octopus_min.is_octopus_change() is True
+
+        # Test non-octopus change types
+        direct_metadata = ChangeMetadata(
+            change_type="direct", source_branches=[], target_branch="main"
+        )
+        assert direct_metadata.is_octopus_change() is False
+
+        merge_metadata = ChangeMetadata(
+            change_type="merge",
+            source_branches=["feature-branch"],
+            target_branch="main",
+        )
+        assert merge_metadata.is_octopus_change() is False
+
+        # Test method logic with non-octopus type but multiple branches
+        squash_metadata = ChangeMetadata(
+            change_type="squash",
+            source_branches=["branch1", "branch2"],
+            target_branch="main",
+        )
+        assert squash_metadata.is_octopus_change() is False
+
 
 class TestChangeMetadataBehavior:
     """Test ChangeMetadata behavior and constraints."""

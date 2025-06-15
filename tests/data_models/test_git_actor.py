@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 import pytest
 from hypothesis import given
-from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from auto_release_note_generation.data_models.shared import GitActor
@@ -165,7 +164,7 @@ class TestGitActorEdgeCases:
         actor = GitActorFactory.create(name=name)
         assert actor.name == name
 
-    @given(st.datetimes())
+    @given(HypothesisStrategies.valid_timestamps)
     def test_various_timestamp_formats(self, timestamp):
         """Test GitActor handles various timestamp formats."""
         actor = GitActorFactory.create(timestamp=timestamp)
