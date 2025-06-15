@@ -2,11 +2,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
-from auto_release_note_generation.data_models.shared import GitActor, GitMetadata
+from auto_release_note_generation.data_models.shared import (
+    ChangeMetadata,
+    GitActor,
+    GitMetadata,
+)
 
 # =============================================================================
 # TEST CONFIGURATION & SHARED UTILITIES
@@ -30,6 +34,50 @@ class SharedTestConfig:
         "iQIcBAABCAAGBQJhXYZ1AAoJEH8JWXvNOxq+ABC123def456789abcdef123456789\n"
         "=AbC1\n-----END PGP SIGNATURE-----"
     )
+
+    # ChangeMetadata specific defaults
+    DEFAULT_CHANGE_TYPE = "direct"
+    DEFAULT_SOURCE_BRANCH = "feature/user-auth"
+    DEFAULT_TARGET_BRANCH = "main"
+    DEFAULT_MERGE_BASE = "abc123def456789abcdef123456789abcdef1230"
+    DEFAULT_PULL_REQUEST_ID = "42"
+
+    # ChangeMetadata constants
+    VALID_CHANGE_TYPES = [
+        "direct",
+        "merge",
+        "squash",
+        "octopus",
+        "rebase",
+        "cherry-pick",
+        "revert",
+        "initial",
+        "amend",
+    ]
+    INVALID_CHANGE_TYPES = ["invalid", "", None, "push", "pull", "fetch"]
+
+    TYPICAL_BRANCH_NAMES = [
+        "main",
+        "master",
+        "develop",
+        "feature/auth",
+        "bugfix/fix-login",
+        "hotfix/security-patch",
+        "release/v1.2.0",
+    ]
+
+    INVALID_BRANCH_NAMES = [
+        "",
+        "  ",
+        "feature with spaces",
+        "feature\nwith\nnewlines",
+        "feature\twith\ttabs",
+        "feature/",
+        "/feature",
+        "//double-slash",
+    ]
+
+    REALISTIC_PR_IDS = ["1", "42", "123", "9999", "PR-001", "pull-request-456"]
 
     # Test patterns
     MIN_SHA_LENGTH = 4
@@ -162,6 +210,101 @@ class HypothesisStrategies:
 
     gpg_signatures = st.one_of(valid_gpg_signatures, invalid_gpg_signatures)
 
+    # ChangeMetadata strategies
+    valid_change_types = st.sampled_from(
+        [
+            "direct",
+            "merge",
+            "squash",
+            "octopus",
+            "rebase",
+            "cherry-pick",
+            "revert",
+            "initial",
+            "amend",
+        ]
+    )
+
+    invalid_change_types = st.one_of(
+        st.just(""),  # Empty string
+        st.just("invalid"),  # Invalid type
+        st.just("push"),  # Not in allowed types
+        st.just("pull"),  # Not in allowed types
+        st.just("fetch"),  # Not in allowed types
+        st.text(min_size=1, max_size=20).filter(
+            lambda x: x.strip()
+            not in [
+                "direct",
+                "merge",
+                "squash",
+                "octopus",
+                "rebase",
+                "cherry-pick",
+                "revert",
+                "initial",
+                "amend",
+            ]
+        ),  # Any other string not in valid types
+    )
+
+    valid_branch_names = st.text(
+        min_size=1,
+        max_size=100,
+        alphabet=st.characters(
+            whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_/."
+        ),
+    ).filter(
+        lambda x: (
+            len(x.strip()) > 0
+            and not x.startswith("/")
+            and not x.endswith("/")
+            and "//" not in x
+            and not any(c in x for c in [" ", "\t", "\n", "\r"])
+        )
+    )
+
+    invalid_branch_names = st.one_of(
+        st.just(""),  # Empty string
+        st.just("  "),  # Whitespace only
+        st.text(min_size=1, max_size=50).filter(
+            lambda x: (
+                " " in x.strip()
+                or "\t" in x.strip()
+                or "\n" in x.strip()
+                or x.strip().startswith("/")
+                or x.strip().endswith("/")
+                or "//" in x.strip()
+                or not x.strip()  # Empty after stripping
+            )
+        ),  # Invalid characters or patterns that persist after stripping
+    )
+
+    # Enhanced source branch list strategies
+    empty_source_branches: st.SearchStrategy[list[str]] = st.just([])
+
+    single_source_branch = st.lists(valid_branch_names, min_size=1, max_size=1)
+
+    multiple_source_branches = st.lists(valid_branch_names, min_size=2, max_size=8)
+
+    source_branch_lists = st.one_of(single_source_branch, multiple_source_branches)
+
+    empty_source_branch_lists: st.SearchStrategy[list[str]] = st.just([])
+
+    # Enhanced PR ID strategies
+    valid_pull_request_ids = st.one_of(
+        st.none(),
+        st.text(
+            min_size=1,
+            max_size=50,
+            alphabet=st.characters(
+                whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_"
+            ),
+        ).filter(lambda x: len(x.strip()) > 0),
+    )
+
+    # Merge base strategies (reuse GitSHA strategies)
+    valid_merge_bases = st.one_of(st.none(), valid_git_shas)
+
 
 # =============================================================================
 # TEST DATA COLLECTIONS - Organized by domain
@@ -244,6 +387,187 @@ class GitTestData:
         ("Jane Author", "jane@author.com", "Bob Committer", "bob@maintainer.com"),
         # Corporate patterns
         ("Developer", "dev@company.com", "Build System", "build@ci.company.com"),
+    ]
+
+
+class ChangeTestData:
+    """Test data specific to ChangeMetadata and change-related models."""
+
+    # Real-world change type patterns
+    # (change_type, source_branches, target, merge_base, pr_id)
+    CHANGE_TYPE_PATTERNS = [
+        # Direct commits (no merge)
+        ("direct", [], "main", None, None),
+        ("direct", [], "develop", None, "456"),
+        ("direct", ["main"], "main", None, None),  # Self-targeting direct
+        # Simple merges
+        ("merge", ["feature/auth"], "main", "abc123def456", "123"),
+        ("merge", ["bugfix/login"], "develop", "def456abc789", None),
+        ("merge", ["hotfix/security"], "main", "123456abcdef", "urgent-001"),
+        # Squash merges
+        ("squash", ["feature/refactor"], "main", "123456abcdef", "789"),
+        ("squash", ["hotfix/security"], "master", None, "001"),
+        ("squash", ["feature/small-change"], "develop", "abcdef123456", "PR-042"),
+        # Octopus merges (multiple source branches)
+        ("octopus", ["feature/a", "feature/b"], "main", "abcdef123456", "111"),
+        ("octopus", ["dev", "staging", "hotfix"], "main", "456789fedcba", None),
+        (
+            "octopus",
+            ["f1", "f2", "f3", "f4"],
+            "develop",
+            "fedcba987654",
+            "complex-merge",
+        ),
+        # Rebase commits (replayed commits)
+        ("rebase", ["feature/branch"], "main", "abc123def456", None),
+        ("rebase", [], "develop", None, None),  # Direct rebase
+        # Cherry-pick commits (selective commit application)
+        ("cherry-pick", ["hotfix/patch"], "main", "def456abc789", None),
+        ("cherry-pick", [], "develop", None, "cherry-pick-123"),
+        # Revert commits (undoing changes)
+        ("revert", ["bad-commit"], "main", "123456abcdef", "revert-456"),
+        ("revert", [], "develop", None, None),
+        # Initial commits (repository start)
+        ("initial", [], "main", None, None),
+        ("initial", [], "master", None, None),
+        # Amended commits (git commit --amend)
+        ("amend", [], "feature/fix", None, None),
+        ("amend", ["original-branch"], "main", "abc123def456", "amended-pr"),
+    ]
+
+    # Realistic branch name patterns
+    COMMON_BRANCHES = ["main", "master", "develop", "staging", "production"]
+
+    FEATURE_BRANCHES = [
+        "feature/user-authentication",
+        "feature/payment-integration",
+        "feature/api-v2",
+        "feat/mobile-app",
+        "features/dashboard-redesign",
+    ]
+
+    BUGFIX_BRANCHES = [
+        "bugfix/login-issue",
+        "bugfix/memory-leak",
+        "fix/security-vulnerability",
+        "hotfix/critical-bug",
+        "bug/ui-rendering",
+    ]
+
+    RELEASE_BRANCHES = [
+        "release/v1.0.0",
+        "release/v2.1.3",
+        "rel/sprint-42",
+        "releases/q4-2023",
+    ]
+
+    # Corporate patterns
+    CORPORATE_BRANCH_PATTERNS = [
+        "users/john.doe/experimental-feature",
+        "teams/backend/database-migration",
+        "releases/sprint-42",
+        "environments/staging-deployment",
+        "projects/mobile-app/feature-auth",
+        "departments/security/audit-fixes",
+    ]
+
+    # Edge case patterns
+    EDGE_CASE_BRANCH_NAMES = [
+        "a",  # Minimum length
+        "feature-with-dashes",
+        "feature_with_underscores",
+        "feature.with.dots",
+        "123-numeric-start",
+        "CamelCaseBranch",
+        "UPPERCASE-BRANCH",
+        "mixed-Case_Branch.name",
+        "very-long-branch-name-that-tests-maximum-length-handling",
+    ]
+
+    # Unicode and international branch names
+    UNICODE_BRANCH_NAMES = [
+        "feature/测试",  # Chinese
+        "bugfix/тест",  # Russian
+        "release/한국어",  # Korean
+        "hotfix/العربية",  # Arabic
+        "feature/日本語",  # Japanese
+    ]
+
+    # Real-world change patterns
+    DIRECT_CHANGE_PATTERNS = [
+        # Single-branch direct commits
+        (["main"], "main"),
+        (["develop"], "develop"),
+        (["hotfix/critical"], "main"),
+    ]
+
+    MERGE_CHANGE_PATTERNS = [
+        # Feature merges
+        (["feature/auth"], "develop"),
+        (["feature/payment", "feature/ui"], "main"),
+        (["bugfix/security"], "main"),
+    ]
+
+    SQUASH_CHANGE_PATTERNS = [
+        # Squash merges common in GitHub workflow
+        (["feature/small-fix"], "main"),
+        (["fix/typo"], "develop"),
+    ]
+
+    OCTOPUS_CHANGE_PATTERNS = [
+        # Multi-branch octopus merges
+        (["feature/a", "feature/b", "feature/c"], "develop"),
+        (["hotfix/p1", "hotfix/p2", "bugfix/minor"], "main"),
+    ]
+
+    # Invalid combinations for testing validation
+    INVALID_COMBINATIONS = [
+        # Empty source branches should fail for merge/squash
+        ([], "develop", "merge"),
+        ([], "main", "squash"),
+        # Single source branch with octopus should fail
+        (["feature/single"], "main", "octopus"),
+        # Multiple source branches with direct-style changes should fail
+        (["feature/a", "feature/b"], "main", "direct"),
+        (["feature/a", "feature/b"], "main", "rebase"),
+        (["feature/a", "feature/b"], "main", "cherry-pick"),
+        (["feature/a", "feature/b"], "main", "revert"),
+        (["feature/a", "feature/b"], "main", "amend"),
+        # Initial commits with source branches should fail
+        (["feature/branch"], "main", "initial"),
+        (["main"], "main", "initial"),
+    ]
+
+    # Pull request ID patterns
+    GITHUB_PR_PATTERNS = ["1", "42", "123", "9999"]
+    GITLAB_MR_PATTERNS = ["!1", "!42", "!123"]
+    CUSTOM_PR_PATTERNS = ["PR-001", "MR-042", "pull-request-123"]
+
+    # Comprehensive PR ID patterns from various systems
+    REALISTIC_PR_IDS = [
+        "1",
+        "42",
+        "123",
+        "9999",
+        "1234567890",  # Numeric
+        "pr-123",
+        "PR-456",
+        "pull-789",  # Prefixed
+        "abc123",
+        "gh-456",
+        "gl-789",  # Mixed
+        "JIRA-123",
+        "TICKET-456",
+        "ISSUE-789",  # Issue tracker
+        "feature-request-001",
+        "hotfix-urgent",  # Descriptive
+    ]
+
+    # Merge base patterns (SHA where branches diverged)
+    MERGE_BASE_PATTERNS = [
+        "abc123def456789abcdef123456789abcdef1230",
+        "def456abc789def123abc456def789abc123ab",
+        "123456789abcdef123456789abcdef123456789",
     ]
 
 
@@ -374,6 +698,260 @@ class GitMetadataFactory:
         return patterns[pattern_name](**overrides)
 
 
+class ChangeMetadataFactory:
+    """Factory for creating ChangeMetadata test instances."""
+
+    @staticmethod
+    def create(**overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata with optional field overrides."""
+        defaults: dict[str, Any] = {
+            "change_type": SharedTestConfig.DEFAULT_CHANGE_TYPE,
+            "source_branches": [SharedTestConfig.DEFAULT_SOURCE_BRANCH],
+            "target_branch": SharedTestConfig.DEFAULT_TARGET_BRANCH,
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": SharedTestConfig.DEFAULT_PULL_REQUEST_ID,
+        }
+        defaults.update(overrides)
+
+        # Adjust source branches based on change type to ensure valid combinations
+        change_type = defaults.get("change_type", SharedTestConfig.DEFAULT_CHANGE_TYPE)
+        if change_type == "octopus" and len(defaults.get("source_branches", [])) < 2:
+            defaults["source_branches"] = ["feature/branch-1", "feature/branch-2"]
+        elif change_type == "initial":
+            defaults["source_branches"] = []  # Initial commits have no source branches
+        elif change_type == "direct" and len(defaults.get("source_branches", [])) > 1:
+            defaults["source_branches"] = [defaults["source_branches"][0]]
+
+        return ChangeMetadata(**defaults)
+
+    @staticmethod
+    def create_direct_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a direct change (single source branch)."""
+        branch = source_branch or SharedTestConfig.DEFAULT_SOURCE_BRANCH
+        defaults: dict[str, Any] = {
+            "change_type": "direct",
+            "source_branches": [branch],
+            "merge_base": None,  # Direct changes don't have merge base
+            "pull_request_id": None,  # Direct changes typically don't have PR IDs
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_merge_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a merge change (feature branch merge)."""
+        branch = source_branch or "feature/new-feature"
+        defaults: dict[str, Any] = {
+            "change_type": "merge",
+            "source_branches": [branch],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": None,  # Let tests specify PR ID explicitly
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_squash_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a squash merge (GitHub-style)."""
+        branch = source_branch or "feature/small-fix"
+        defaults: dict[str, Any] = {
+            "change_type": "squash",
+            "source_branches": [branch],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_octopus_change(
+        branch_count: int = 3, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for an octopus merge (multiple source branches)."""
+        if branch_count < 2:
+            raise ValueError("Octopus merge requires at least 2 source branches")
+
+        branches = [f"feature/branch-{i}" for i in range(branch_count)]
+        defaults: dict[str, Any] = {
+            "change_type": "octopus",
+            "source_branches": branches,
+            "target_branch": "develop",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": None,  # Don't include default PR ID
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_github_pr_change(
+        pr_id: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata with GitHub PR pattern."""
+        pr = pr_id or "42"
+        defaults: dict[str, Any] = {
+            "change_type": "squash",
+            "source_branches": ["feature/github-integration"],
+            "target_branch": "main",
+            "pull_request_id": pr,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_hotfix_change(**overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata for a hotfix (direct to main)."""
+        defaults: dict[str, Any] = {
+            "change_type": "merge",
+            "source_branches": ["hotfix/critical-security-fix"],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": "HOTFIX-001",
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_release_change(**overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata for a release branch merge."""
+        defaults: dict[str, Any] = {
+            "change_type": "merge",
+            "source_branches": ["release/v1.2.0"],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_rebase_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a rebase operation."""
+        branch = source_branch or "feature/rebased-branch"
+        defaults: dict[str, Any] = {
+            "change_type": "rebase",
+            "source_branches": [branch] if branch else [],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": None,  # Rebases typically don't have PR IDs
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_cherry_pick_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a cherry-pick operation."""
+        branch = source_branch or "hotfix/cherry-picked"
+        defaults: dict[str, Any] = {
+            "change_type": "cherry-pick",
+            "source_branches": [branch] if branch else [],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": None,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_revert_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for a revert operation."""
+        branch = source_branch or "bad-commit"
+        defaults: dict[str, Any] = {
+            "change_type": "revert",
+            "source_branches": [branch] if branch else [],
+            "target_branch": "main",
+            "merge_base": SharedTestConfig.DEFAULT_MERGE_BASE,
+            "pull_request_id": None,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_initial_change(**overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata for an initial commit."""
+        defaults: dict[str, Any] = {
+            "change_type": "initial",
+            "source_branches": [],  # Initial commits have no source branches
+            "target_branch": "main",
+            "merge_base": None,  # No merge base for initial commits
+            "pull_request_id": None,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_amend_change(
+        source_branch: str | None = None, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata for an amended commit."""
+        branch = source_branch or "feature/amended"
+        defaults: dict[str, Any] = {
+            "change_type": "amend",
+            "source_branches": [branch] if branch else [],
+            "target_branch": "feature/amended",  # Often amending on same branch
+            "merge_base": None,
+            "pull_request_id": None,
+        }
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_with_pr(pr_id: str | None = None, **overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata with pull request information."""
+        pr = pr_id or SharedTestConfig.DEFAULT_PULL_REQUEST_ID
+        defaults: dict[str, Any] = {"pull_request_id": pr}
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_corporate_pattern(
+        pattern_index: int = 0, **overrides: Any
+    ) -> ChangeMetadata:
+        """Create ChangeMetadata with corporate naming patterns."""
+        target = ChangeTestData.CORPORATE_BRANCH_PATTERNS[
+            pattern_index % len(ChangeTestData.CORPORATE_BRANCH_PATTERNS)
+        ]
+        defaults: dict[str, Any] = {"target_branch": target}
+        defaults.update(overrides)
+        return ChangeMetadataFactory.create(**defaults)
+
+    @staticmethod
+    def create_from_pattern(pattern_name: str, **overrides: Any) -> ChangeMetadata:
+        """Create ChangeMetadata from predefined patterns."""
+        patterns: dict[str, Any] = {
+            "direct": ChangeMetadataFactory.create_direct_change,
+            "merge": ChangeMetadataFactory.create_merge_change,
+            "squash": ChangeMetadataFactory.create_squash_change,
+            "octopus": ChangeMetadataFactory.create_octopus_change,
+            "rebase": ChangeMetadataFactory.create_rebase_change,
+            "cherry-pick": ChangeMetadataFactory.create_cherry_pick_change,
+            "revert": ChangeMetadataFactory.create_revert_change,
+            "initial": ChangeMetadataFactory.create_initial_change,
+            "amend": ChangeMetadataFactory.create_amend_change,
+            "github-pr": ChangeMetadataFactory.create_github_pr_change,
+            "hotfix": ChangeMetadataFactory.create_hotfix_change,
+            "release": ChangeMetadataFactory.create_release_change,
+            "with_pr": ChangeMetadataFactory.create_with_pr,
+            "corporate": ChangeMetadataFactory.create_corporate_pattern,
+        }
+
+        if pattern_name not in patterns:
+            raise ValueError(f"Unknown pattern: {pattern_name}")
+
+        return patterns[pattern_name](**overrides)
+
+
 # =============================================================================
 # SHARED TEST UTILITIES - Reusable across all data models
 # =============================================================================
@@ -474,6 +1052,68 @@ def commit_type_examples():
         "merge": GitMetadataFactory.create_merge_commit(),
         "octopus": GitMetadataFactory.create_octopus_merge(),
         "signed": GitMetadataFactory.create_signed_commit(),
+    }
+
+
+@pytest.fixture
+def default_change_metadata():
+    """Default ChangeMetadata instance for testing."""
+    return ChangeMetadataFactory.create()
+
+
+@pytest.fixture
+def change_metadata_collection():
+    """Collection of various ChangeMetadata instances for bulk testing."""
+    return [
+        ChangeMetadataFactory.create_direct_change(),
+        ChangeMetadataFactory.create_merge_change(),
+        ChangeMetadataFactory.create_squash_change(),
+        ChangeMetadataFactory.create_octopus_change(branch_count=3),
+        ChangeMetadataFactory.create_rebase_change(),
+        ChangeMetadataFactory.create_cherry_pick_change(),
+        ChangeMetadataFactory.create_revert_change(),
+        ChangeMetadataFactory.create_initial_change(),
+        ChangeMetadataFactory.create_amend_change(),
+        ChangeMetadataFactory.create_github_pr_change(),
+        ChangeMetadataFactory.create_hotfix_change(),
+        ChangeMetadataFactory.create_release_change(),
+    ]
+
+
+@pytest.fixture
+def direct_change_metadata():
+    """ChangeMetadata instance representing a direct change."""
+    return ChangeMetadataFactory.create_direct_change()
+
+
+@pytest.fixture
+def merge_change_metadata():
+    """ChangeMetadata instance representing a merge change."""
+    return ChangeMetadataFactory.create_merge_change()
+
+
+@pytest.fixture
+def octopus_change_metadata():
+    """ChangeMetadata instance representing an octopus merge."""
+    return ChangeMetadataFactory.create_octopus_change()
+
+
+@pytest.fixture
+def change_type_examples():
+    """Dictionary of change types with their metadata instances."""
+    return {
+        "direct": ChangeMetadataFactory.create_direct_change(),
+        "merge": ChangeMetadataFactory.create_merge_change(),
+        "squash": ChangeMetadataFactory.create_squash_change(),
+        "octopus": ChangeMetadataFactory.create_octopus_change(),
+        "rebase": ChangeMetadataFactory.create_rebase_change(),
+        "cherry-pick": ChangeMetadataFactory.create_cherry_pick_change(),
+        "revert": ChangeMetadataFactory.create_revert_change(),
+        "initial": ChangeMetadataFactory.create_initial_change(),
+        "amend": ChangeMetadataFactory.create_amend_change(),
+        "github-pr": ChangeMetadataFactory.create_github_pr_change(),
+        "hotfix": ChangeMetadataFactory.create_hotfix_change(),
+        "release": ChangeMetadataFactory.create_release_change(),
     }
 
 
@@ -1002,6 +1642,523 @@ class TestGitMetadataFactory:
             repr_result = repr(metadata)
             assert isinstance(str_result, str)
             assert isinstance(repr_result, str)
+
+
+# =============================================================================
+# CHANGEMETADATA TEST CLASSES - Organized by test category
+# =============================================================================
+
+
+class TestChangeMetadataValidation:
+    """Test ChangeMetadata field validation and constraints."""
+
+    @given(
+        HypothesisStrategies.valid_change_types,
+        HypothesisStrategies.valid_branch_names,
+        HypothesisStrategies.valid_merge_bases,
+        HypothesisStrategies.valid_pull_request_ids,
+    )
+    def test_comprehensive_valid_creation(
+        self, change_type, target_branch, merge_base, pr_id
+    ):
+        """Test comprehensive valid creation with all field combinations."""
+        # Generate appropriate source branches based on change type
+        source_branches: list[str]
+        if change_type == "direct":
+            source_branches = []
+        elif change_type == "initial":
+            source_branches = []  # Initial commits have no source branches
+        elif change_type == "octopus":
+            source_branches = ["branch-1", "branch-2"]
+        else:  # merge, squash, rebase, cherry-pick, revert, amend
+            source_branches = ["feature-branch"]
+
+        metadata = ChangeMetadata(
+            change_type=change_type,
+            source_branches=source_branches,
+            target_branch=target_branch,
+            merge_base=merge_base,
+            pull_request_id=pr_id,
+        )
+
+        assert metadata.change_type == change_type
+        assert metadata.source_branches == source_branches
+        assert metadata.target_branch == target_branch.strip()
+        assert metadata.merge_base == merge_base
+        assert metadata.pull_request_id == (
+            pr_id.strip() if pr_id and pr_id.strip() else None
+        )
+
+    def test_valid_creation(self):
+        """Test that valid inputs create ChangeMetadata successfully."""
+        # Test direct change with single source branch
+        direct_metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=["feature/test"],
+            target_branch="main",
+        )
+        assert direct_metadata.change_type == "direct"
+        assert direct_metadata.source_branches == ["feature/test"]
+
+        # Test merge change with single source branch
+        merge_metadata = ChangeMetadata(
+            change_type="merge",
+            source_branches=["feature/test"],
+            target_branch="main",
+            merge_base="abc123",
+        )
+        assert merge_metadata.change_type == "merge"
+
+        # Test octopus change with multiple source branches
+        octopus_metadata = ChangeMetadata(
+            change_type="octopus",
+            source_branches=["feature/a", "feature/b"],
+            target_branch="main",
+            merge_base="abc123",
+        )
+        assert octopus_metadata.change_type == "octopus"
+        assert len(octopus_metadata.source_branches) == 2
+
+    @given(HypothesisStrategies.invalid_change_types)
+    def test_invalid_change_type_rejection(self, invalid_type):
+        """Test that invalid change types raise ValidationError."""
+        TestHelpers.assert_validation_error(
+            ChangeMetadataFactory.create,
+            field_name="change_type",
+            change_type=invalid_type,
+        )
+
+    @given(HypothesisStrategies.invalid_branch_names)
+    @settings(suppress_health_check=[HealthCheck.filter_too_much])
+    def test_invalid_target_branch_rejection(self, invalid_branch):
+        """Test that invalid target branches raise ValidationError."""
+        TestHelpers.assert_validation_error(
+            ChangeMetadataFactory.create,
+            field_name="target_branch",
+            target_branch=invalid_branch,
+        )
+
+    @given(HypothesisStrategies.empty_source_branch_lists)
+    def test_empty_source_branches_allowed(self, empty_list):
+        """Test that empty source branch lists are allowed."""
+        metadata = ChangeMetadataFactory.create(source_branches=empty_list)
+        assert metadata.source_branches == []
+
+    @pytest.mark.parametrize(
+        ("source_branches", "target_branch", "change_type"),
+        ChangeTestData.INVALID_COMBINATIONS,
+    )
+    def test_invalid_business_logic_combinations(
+        self, source_branches, target_branch, change_type
+    ):
+        """Test that logically invalid combinations are rejected."""
+        with pytest.raises((ValidationError, ValueError)):
+            ChangeMetadata(
+                change_type=change_type,
+                source_branches=source_branches,
+                target_branch=target_branch,
+            )
+
+    def test_whitespace_stripping(self):
+        """Test that whitespace is stripped from branch names."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=["  feature/test  "],
+            target_branch="  main  ",
+        )
+
+        assert metadata.source_branches == ["feature/test"]
+        assert metadata.target_branch == "main"
+
+
+class TestChangeMetadataBehavior:
+    """Test ChangeMetadata behavior and constraints."""
+
+    def test_immutability(self, default_change_metadata):
+        """Test that ChangeMetadata is immutable after creation."""
+        field_updates = {
+            "change_type": "merge",
+            "source_branches": ["new/branch"],
+            "target_branch": "develop",
+            "merge_base": "new_sha_123",
+            "pull_request_id": "999",
+        }
+
+        TestHelpers.assert_model_immutable(default_change_metadata, field_updates)
+
+    def test_string_representation_format(self):
+        """Test __str__ returns compact format."""
+        # Direct change
+        direct = ChangeMetadataFactory.create_direct_change(
+            source_branch="feature/auth"
+        )
+        assert str(direct) == "direct from feature/auth → main"
+
+        # Merge change
+        merge = ChangeMetadataFactory.create_merge_change()
+        assert str(merge) == "merge from feature/new-feature → main"
+
+        # Multiple branches
+        octopus = ChangeMetadataFactory.create_octopus_change(branch_count=3)
+        assert str(octopus) == "octopus from 3 branches → develop"
+
+        # With PR ID
+        pr_change = ChangeMetadataFactory.create_github_pr_change(pr_id="42")
+        assert (
+            str(pr_change) == "squash from feature/github-integration → main (PR: 42)"
+        )
+
+    def test_string_representation_without_source_branches(self):
+        """Test __str__ handles empty source branches."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=[],
+            target_branch="main",
+        )
+        assert str(metadata) == "direct → main"
+
+    @given(
+        HypothesisStrategies.valid_change_types,
+        HypothesisStrategies.valid_branch_names,
+    )
+    def test_repr_format(self, change_type, target_branch):
+        """Test __repr__ returns detailed representation."""
+        # Generate appropriate source branches based on change type
+        if change_type == "direct":
+            source_branches = ["single-branch"]
+        elif change_type == "initial":
+            source_branches = []  # Initial commits have no source branches
+        elif change_type == "octopus":
+            source_branches = ["branch-1", "branch-2"]
+        else:  # merge, squash, rebase, cherry-pick, revert, amend
+            source_branches = ["feature-branch"]
+
+        metadata = ChangeMetadata(
+            change_type=change_type,
+            source_branches=source_branches,
+            target_branch=target_branch,
+        )
+        repr_str = repr(metadata)
+
+        assert repr_str.startswith("ChangeMetadata(")
+        assert f"change_type='{change_type}'" in repr_str
+        assert f"source_branches={source_branches}" in repr_str
+        assert f"target_branch='{target_branch.strip()}'" in repr_str
+
+    def test_string_methods_consistency(self, change_metadata_collection):
+        """Test that str and repr work consistently across instances."""
+        for metadata in change_metadata_collection:
+            str_result = str(metadata)
+            repr_result = repr(metadata)
+
+            assert isinstance(str_result, str)
+            assert len(str_result) > 0
+            assert isinstance(repr_result, str)
+            assert len(repr_result) > 0
+
+
+class TestChangeMetadataEdgeCases:
+    """Test ChangeMetadata edge cases and boundary conditions."""
+
+    def test_minimum_length_fields(self):
+        """Test minimum valid field lengths."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=["a"],
+            target_branch="b",
+        )
+
+        assert metadata.source_branches == ["a"]
+        assert metadata.target_branch == "b"
+
+    def test_maximum_length_fields(self):
+        """Test maximum valid field lengths."""
+        long_branch = "a" * 100
+        metadata = ChangeMetadata(
+            change_type="merge",
+            source_branches=[long_branch],
+            target_branch=long_branch,
+        )
+
+        assert metadata.source_branches == [long_branch]
+        assert metadata.target_branch == long_branch
+
+    @pytest.mark.parametrize(
+        ("source_branches", "target_branch"), ChangeTestData.DIRECT_CHANGE_PATTERNS
+    )
+    def test_direct_change_patterns(self, source_branches, target_branch):
+        """Test direct change patterns from real-world scenarios."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=source_branches,
+            target_branch=target_branch,
+        )
+        assert metadata.change_type == "direct"
+        assert len(metadata.source_branches) <= 1
+
+    @pytest.mark.parametrize(
+        ("source_branches", "target_branch"), ChangeTestData.MERGE_CHANGE_PATTERNS
+    )
+    def test_merge_change_patterns(self, source_branches, target_branch):
+        """Test merge change patterns from real-world scenarios."""
+        metadata = ChangeMetadata(
+            change_type="merge",
+            source_branches=source_branches,
+            target_branch=target_branch,
+        )
+        assert metadata.change_type == "merge"
+
+    @pytest.mark.parametrize(
+        ("source_branches", "target_branch"), ChangeTestData.OCTOPUS_CHANGE_PATTERNS
+    )
+    def test_octopus_change_patterns(self, source_branches, target_branch):
+        """Test octopus merge patterns."""
+        metadata = ChangeMetadata(
+            change_type="octopus",
+            source_branches=source_branches,
+            target_branch=target_branch,
+        )
+        assert metadata.change_type == "octopus"
+        assert len(metadata.source_branches) >= 2
+
+    @pytest.mark.parametrize("pr_id", ChangeTestData.GITHUB_PR_PATTERNS)
+    def test_github_pr_id_patterns(self, pr_id):
+        """Test GitHub PR ID patterns."""
+        metadata = ChangeMetadataFactory.create_github_pr_change(pr_id=pr_id)
+        assert metadata.pull_request_id == pr_id
+
+    @pytest.mark.parametrize("merge_base", ChangeTestData.MERGE_BASE_PATTERNS)
+    def test_merge_base_patterns(self, merge_base):
+        """Test merge base SHA patterns."""
+        metadata = ChangeMetadataFactory.create_merge_change(merge_base=merge_base)
+        assert metadata.merge_base == merge_base
+
+    def test_branch_name_special_characters(self):
+        """Test branch names with special characters."""
+        special_branches = [
+            "feature/user-auth",
+            "bugfix/fix-login-issue",
+            "release/v1.2.0",
+            "hotfix/security.patch",
+        ]
+
+        for branch in special_branches:
+            metadata = ChangeMetadata(
+                change_type="merge",
+                source_branches=[branch],
+                target_branch="main",
+            )
+            assert metadata.source_branches == [branch]
+
+    def test_none_optional_fields(self):
+        """Test that optional fields can be None."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=["main"],
+            target_branch="main",
+            merge_base=None,
+            pull_request_id=None,
+        )
+
+        assert metadata.merge_base is None
+        assert metadata.pull_request_id is None
+
+    def test_unicode_branch_names(self):
+        """Test branch names with Unicode characters."""
+        for branch_name in ChangeTestData.UNICODE_BRANCH_NAMES:
+            metadata = ChangeMetadata(
+                change_type="merge",
+                source_branches=[branch_name],
+                target_branch="main",
+            )
+            assert metadata.source_branches == [branch_name]
+
+    def test_realistic_pr_id_formats(self):
+        """Test realistic PR ID formats from various systems."""
+        for pr_id in ChangeTestData.REALISTIC_PR_IDS:
+            metadata = ChangeMetadataFactory.create_with_pr(pr_id=pr_id)
+            assert metadata.pull_request_id == pr_id
+
+    def test_empty_pr_id_normalization(self):
+        """Test that empty PR ID becomes None."""
+        metadata = ChangeMetadata(
+            change_type="direct",
+            source_branches=[],
+            target_branch="main",
+            pull_request_id="",
+        )
+        assert metadata.pull_request_id is None
+
+        metadata2 = ChangeMetadata(
+            change_type="direct",
+            source_branches=[],
+            target_branch="main",
+            pull_request_id="   ",
+        )
+        assert metadata2.pull_request_id is None
+
+    def test_many_source_branches(self):
+        """Test large octopus merges."""
+        many_branches = [f"feature/branch-{i}" for i in range(10)]
+        metadata = ChangeMetadata(
+            change_type="octopus",
+            source_branches=many_branches,
+            target_branch="main",
+        )
+        assert len(metadata.source_branches) == 10
+        assert metadata.is_octopus_change()
+
+    def test_change_type_patterns_from_test_data(self):
+        """Test change type patterns from ChangeTestData."""
+        for pattern in ChangeTestData.CHANGE_TYPE_PATTERNS:
+            change_type, source_branches, target, merge_base, pr_id = pattern
+            metadata = ChangeMetadata(
+                change_type=change_type,  # type: ignore[arg-type]
+                source_branches=source_branches,
+                target_branch=target,
+                merge_base=merge_base,
+                pull_request_id=pr_id,
+            )
+            assert metadata.change_type == change_type
+            assert metadata.source_branches == source_branches
+            assert metadata.target_branch == target
+
+
+class TestChangeMetadataFactory:
+    """Test ChangeMetadataFactory functionality."""
+
+    def test_default_creation(self, default_change_metadata):
+        """Test factory creates valid default ChangeMetadata."""
+        factory_metadata = ChangeMetadataFactory.create()
+
+        assert factory_metadata.change_type == default_change_metadata.change_type
+        assert (
+            factory_metadata.source_branches == default_change_metadata.source_branches
+        )
+        assert factory_metadata.target_branch == default_change_metadata.target_branch
+
+    def test_override_functionality(self):
+        """Test factory accepts override values."""
+        custom_type = "merge"
+        metadata = ChangeMetadataFactory.create(change_type=custom_type)
+
+        assert metadata.change_type == custom_type
+        assert metadata.target_branch == SharedTestConfig.DEFAULT_TARGET_BRANCH
+
+    def test_specialized_factory_methods(self):
+        """Test specialized factory methods work correctly."""
+        # Direct change
+        direct = ChangeMetadataFactory.create_direct_change()
+        assert direct.change_type == "direct"
+        assert len(direct.source_branches) <= 1
+
+        # Merge change
+        merge = ChangeMetadataFactory.create_merge_change()
+        assert merge.change_type == "merge"
+        assert merge.target_branch == "main"
+
+        # Squash change
+        squash = ChangeMetadataFactory.create_squash_change()
+        assert squash.change_type == "squash"
+
+        # Octopus change
+        octopus = ChangeMetadataFactory.create_octopus_change(branch_count=4)
+        assert octopus.change_type == "octopus"
+        assert len(octopus.source_branches) == 4
+
+        # GitHub PR change
+        github_pr = ChangeMetadataFactory.create_github_pr_change()
+        assert github_pr.change_type == "squash"
+        assert github_pr.pull_request_id is not None
+
+        # Hotfix change
+        hotfix = ChangeMetadataFactory.create_hotfix_change()
+        assert hotfix.change_type == "merge"
+        assert "hotfix" in hotfix.source_branches[0]
+
+        # Release change
+        release = ChangeMetadataFactory.create_release_change()
+        assert release.change_type == "merge"
+        assert "release" in release.source_branches[0]
+
+        # Rebase change
+        rebase = ChangeMetadataFactory.create_rebase_change()
+        assert rebase.change_type == "rebase"
+        assert len(rebase.source_branches) <= 1
+
+        # Cherry-pick change
+        cherry_pick = ChangeMetadataFactory.create_cherry_pick_change()
+        assert cherry_pick.change_type == "cherry-pick"
+        assert len(cherry_pick.source_branches) <= 1
+
+        # Revert change
+        revert = ChangeMetadataFactory.create_revert_change()
+        assert revert.change_type == "revert"
+        assert len(revert.source_branches) <= 1
+
+        # Initial change
+        initial = ChangeMetadataFactory.create_initial_change()
+        assert initial.change_type == "initial"
+        assert len(initial.source_branches) == 0
+
+        # Amend change
+        amend = ChangeMetadataFactory.create_amend_change()
+        assert amend.change_type == "amend"
+        assert len(amend.source_branches) <= 1
+
+    def test_pattern_based_creation(self):
+        """Test pattern-based factory usage."""
+        patterns = [
+            "direct",
+            "merge",
+            "squash",
+            "octopus",
+            "rebase",
+            "cherry-pick",
+            "revert",
+            "initial",
+            "amend",
+            "github-pr",
+            "hotfix",
+            "release",
+        ]
+
+        for pattern in patterns:
+            metadata = ChangeMetadataFactory.create_from_pattern(pattern)
+            assert isinstance(metadata, ChangeMetadata)
+
+        # Test invalid pattern
+        with pytest.raises(ValueError, match="Unknown pattern"):
+            ChangeMetadataFactory.create_from_pattern("invalid_pattern")
+
+    @given(HypothesisStrategies.valid_change_types)
+    def test_factory_with_hypothesis(self, change_type):
+        """Test factory works with hypothesis-generated data."""
+        metadata = ChangeMetadataFactory.create(change_type=change_type)
+        assert metadata.change_type == change_type
+
+    def test_factory_creates_valid_instances(self, change_metadata_collection):
+        """Test that all factory methods create valid instances."""
+        for metadata in change_metadata_collection:
+            assert isinstance(metadata, ChangeMetadata)
+            assert isinstance(metadata.change_type, str)
+            assert isinstance(metadata.source_branches, list)
+            assert isinstance(metadata.target_branch, str)
+
+            # Test string methods work
+            str_result = str(metadata)
+            repr_result = repr(metadata)
+            assert isinstance(str_result, str)
+            assert isinstance(repr_result, str)
+
+    def test_octopus_factory_validation(self):
+        """Test octopus factory validates branch count."""
+        with pytest.raises(ValueError, match="at least 2 source branches"):
+            ChangeMetadataFactory.create_octopus_change(branch_count=1)
+
+        # Valid octopus merge
+        octopus = ChangeMetadataFactory.create_octopus_change(branch_count=3)
+        assert len(octopus.source_branches) == 3
 
 
 # =============================================================================
