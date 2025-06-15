@@ -288,7 +288,8 @@ class HypothesisStrategies:
 
     source_branch_lists = st.one_of(single_source_branch, multiple_source_branches)
 
-    empty_source_branch_lists: st.SearchStrategy[list[str]] = st.just([])
+    # Reuse empty_source_branches strategy for consistency
+    empty_source_branch_lists = empty_source_branches
 
     # Enhanced PR ID strategies
     valid_pull_request_ids = st.one_of(
@@ -482,6 +483,21 @@ class ChangeTestData:
         "UPPERCASE-BRANCH",
         "mixed-Case_Branch.name",
         "very-long-branch-name-that-tests-maximum-length-handling",
+        "release/v1.0.0-rc.1",  # Release candidate with dots and dashes
+        "feature/ABC-123-implement-oauth",  # Ticket numbers
+        "hotfix/CVE-2024-1234",  # Security vulnerability references
+        "users/jane.doe/experimental",  # User-namespaced branches
+        "teams/backend/database-migration",  # Team-namespaced branches
+        "environments/staging-eu-west",  # Environment branches
+        "dependencies/upgrade-node-18",  # Dependency update branches
+        "refactor/extract-common-utils",  # Refactoring branches
+        "chore/update-github-actions",  # Maintenance branches
+        "docs/api-documentation-v2",  # Documentation branches
+        "test/integration-test-suite",  # Testing branches
+        "build/docker-optimization",  # Build system branches
+        "ci/add-security-scanning",  # CI/CD branches
+        "perf/optimize-database-queries",  # Performance branches
+        "feat/PROJ-456-user-management",  # Feature with project prefix
     ]
 
     # Unicode and international branch names
@@ -733,11 +749,12 @@ class ChangeMetadataFactory:
         defaults: dict[str, Any] = {
             "change_type": "direct",
             "source_branches": [branch],
+            "target_branch": SharedTestConfig.DEFAULT_TARGET_BRANCH,
             "merge_base": None,  # Direct changes don't have merge base
             "pull_request_id": None,  # Direct changes typically don't have PR IDs
         }
         defaults.update(overrides)
-        return ChangeMetadataFactory.create(**defaults)
+        return ChangeMetadata(**defaults)
 
     @staticmethod
     def create_merge_change(
@@ -787,7 +804,7 @@ class ChangeMetadataFactory:
             "pull_request_id": None,  # Don't include default PR ID
         }
         defaults.update(overrides)
-        return ChangeMetadataFactory.create(**defaults)
+        return ChangeMetadata(**defaults)
 
     @staticmethod
     def create_github_pr_change(
@@ -888,7 +905,7 @@ class ChangeMetadataFactory:
             "pull_request_id": None,
         }
         defaults.update(overrides)
-        return ChangeMetadataFactory.create(**defaults)
+        return ChangeMetadata(**defaults)
 
     @staticmethod
     def create_amend_change(

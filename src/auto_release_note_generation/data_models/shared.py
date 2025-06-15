@@ -6,6 +6,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .utils import GitSHA, GPGSignature
 
 
+# Validation constants to avoid magic numbers
+class ValidationLimits:
+    """Constants for field validation limits."""
+
+    # GitActor field limits
+    NAME_MIN_LENGTH = 1
+    NAME_MAX_LENGTH = 255
+    EMAIL_MIN_LENGTH = 1
+    EMAIL_MAX_LENGTH = 320  # RFC 5321 maximum email length
+
+    # ChangeMetadata field limits
+    BRANCH_NAME_MIN_LENGTH = 1
+
+
 class GitActor(BaseModel):
     """Represents Git author/committer information with validation and immutability."""
 
@@ -14,8 +28,18 @@ class GitActor(BaseModel):
         str_strip_whitespace=True,  # Automatically strips whitespace
     )
 
-    name: str = Field(..., min_length=1, max_length=255, description="Full name")
-    email: str = Field(..., min_length=1, max_length=320, description="Email address")
+    name: str = Field(
+        ...,
+        min_length=ValidationLimits.NAME_MIN_LENGTH,
+        max_length=ValidationLimits.NAME_MAX_LENGTH,
+        description="Full name",
+    )
+    email: str = Field(
+        ...,
+        min_length=ValidationLimits.EMAIL_MIN_LENGTH,
+        max_length=ValidationLimits.EMAIL_MAX_LENGTH,
+        description="Email address",
+    )
     timestamp: datetime = Field(..., description="Timestamp of the Git action")
 
     @field_validator("email")
@@ -109,7 +133,11 @@ class ChangeMetadata(BaseModel):
         default_factory=list,
         description="Source branch names (empty for direct, multiple for octopus)",
     )
-    target_branch: str = Field(..., min_length=1, description="Target branch name")
+    target_branch: str = Field(
+        ...,
+        min_length=ValidationLimits.BRANCH_NAME_MIN_LENGTH,
+        description="Target branch name",
+    )
     merge_base: GitSHA | None = Field(default=None, description="Merge base commit SHA")
     pull_request_id: str | None = Field(
         default=None, description="PR identifier if extractable from commit message"
@@ -152,7 +180,32 @@ class ChangeMetadata(BaseModel):
 
     @model_validator(mode="after")
     def validate_business_logic(self) -> "ChangeMetadata":
-        """Validate business logic constraints between fields."""
+        """Validate business logic constraints between fields.
+
+        Ensures that the combination of change_type and source_branches follows
+        Git workflow patterns and logical constraints.
+
+        Examples:
+            Valid combinations:
+            - direct: [], ["main"] (direct commits to branch)
+            - merge: ["feature/auth"] (feature branch merge)
+            - squash: ["feature/small-fix"] (squashed feature merge)
+            - octopus: ["feat/a", "feat/b", "feat/c"] (multi-branch merge)
+            - rebase: ["feature/branch"] (rebased commits)
+            - cherry-pick: ["hotfix/patch"] (cherry-picked commit)
+            - revert: ["bad-commit"] (reverted commit)
+            - initial: [] (repository initialization)
+            - amend: ["original-branch"] (amended commit)
+
+            Invalid combinations:
+            - direct: ["feat/a", "feat/b"] (direct can't have multiple sources)
+            - merge: [] (merge requires a source branch)
+            - octopus: ["single-branch"] (octopus needs multiple branches)
+            - initial: ["main"] (initial commits can't have sources)
+
+        Raises:
+            ValueError: When field combination violates Git workflow logic.
+        """
         # Direct-style changes should have exactly one or zero source branches
         if (
             self.change_type
