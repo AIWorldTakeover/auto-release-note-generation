@@ -1,680 +1,575 @@
 # Testing Patterns Guide
 
-This document outlines the standardized testing patterns used in the auto-release-note-generation project. These patterns ensure consistency, maintainability, and scalability across all test suites.
+This guide explains the core testing principles and patterns for adding new modules and tests to the auto-release-note-generation project. Follow these patterns to ensure consistency, maintainability, and scalability as the codebase grows.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [File Structure](#file-structure)
-- [Core Components](#core-components)
+- [Core Principles](#core-principles)
+- [Testing Architecture](#testing-architecture)
+- [Essential Components](#essential-components)
 - [Testing Categories](#testing-categories)
 - [Best Practices](#best-practices)
-- [Examples](#examples)
 - [Adding New Tests](#adding-new-tests)
+- [Examples](#examples)
 
-## Overview
+## Core Principles
 
-Our testing approach combines several powerful testing patterns:
+When adding new tests or modules, follow these fundamental principles:
 
+### 1. **Domain Separation**
+- **One file per data model** - Each domain gets its own test file
+- **Clear boundaries** - GitActor tests stay in `test_git_actor.py`, not mixed elsewhere
+- **Focused responsibility** - Each test file has a single, clear purpose
+
+### 2. **Pattern-Based Testing**
 - **Property-based testing** with Hypothesis for comprehensive edge case coverage
-- **Factory pattern** for consistent test data creation
+- **Factory patterns** for consistent test data creation
 - **Parametrized testing** for efficient test case variation
-- **Centralized strategies** for reusable test data generation
-- **Modular organization** for easy maintenance and expansion
+- **Fixture-based setup** for reusable test instances
 
-## File Structure
+### 3. **Shared Infrastructure**
+- **Centralized configuration** for shared constants and utilities
+- **Reusable strategies** for data generation
+- **Common test data** organized by domain
+- **Standardized assertions** for consistent error checking
 
-Each test file follows this standardized structure:
+## Testing Architecture
 
-```python
-# =============================================================================
-# TEST CONFIGURATION & SHARED UTILITIES
-# =============================================================================
+Organize your tests using this modular structure:
 
-class SharedTestConfig:
-    """Configuration constants for all shared data model tests."""
-    pass
-
-# =============================================================================
-# HYPOTHESIS STRATEGIES - Reusable across all data models
-# =============================================================================
-
-class HypothesisStrategies:
-    """Centralized hypothesis strategies for data model testing."""
-    pass
-
-# =============================================================================
-# TEST DATA COLLECTIONS - Organized by domain
-# =============================================================================
-
-class DomainTestData:
-    """Test data specific to domain-related models."""
-    pass
-
-# =============================================================================
-# FACTORY FUNCTIONS - One per data model class
-# =============================================================================
-
-class ModelFactory:
-    """Factory for creating Model test instances."""
-    pass
-
-# =============================================================================
-# SHARED TEST UTILITIES - Reusable across all data models
-# =============================================================================
-
-class TestHelpers:
-    """Helper functions for common test patterns."""
-    pass
-
-# =============================================================================
-# FIXTURES - Shared across test classes
-# =============================================================================
-
-@pytest.fixture
-def model_fixture():
-    pass
-
-# =============================================================================
-# MODEL TEST CLASSES - Organized by test category
-# =============================================================================
-
-class TestModelValidation:
-    pass
-
-class TestModelBehavior:
-    pass
-
-class TestModelEdgeCases:
-    pass
-
-class TestModelFactory:
-    pass
+```
+tests/data_models/
+├── conftest.py                 # Shared configuration and fixtures
+├── test_data.py               # Test data collections by domain
+├── test_strategies.py         # Hypothesis strategies
+├── test_factories.py          # Factory classes for test instances
+├── test_{model_name}.py       # One file per data model
+└── test_utils.py              # Utility function tests
 ```
 
-## Core Components
+### When to Create New Files
 
-### 1. SharedTestConfig
+**Create a new test file when:**
+- Adding a new data model (e.g., `Repository` → `test_repository.py`)
+- Testing a new utility module (e.g., `validation.py` → `test_validation.py`)
+- A domain grows beyond a single file's scope
 
-Centralized configuration for test constants:
+**Use existing files when:**
+- Adding tests for existing models
+- Extending factory methods
+- Adding new test data or strategies
+
+## Essential Components
+
+Understanding these four core components will help you add tests consistently:
+
+### 1. SharedTestConfig - Central Configuration
+
+Define constants that multiple tests need:
 
 ```python
 class SharedTestConfig:
     """Configuration constants for all shared data model tests."""
-    
+
+    # Core defaults - used across all models
     DEFAULT_TIMESTAMP = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     DEFAULT_NAME = "John Doe"
     DEFAULT_EMAIL = "john.doe@example.com"
-    
-    # Add model-specific defaults
-    DEFAULT_VERSION = "1.0.0"
-    DEFAULT_URL = "https://example.com"
+
+    # Model-specific defaults
+    DEFAULT_CHANGE_TYPE = "direct"
+    DEFAULT_TARGET_BRANCH = "main"
+
+    # Validation collections
+    VALID_CHANGE_TYPES = ["direct", "merge", "squash", "octopus", ...]
+    INVALID_CHANGE_TYPES = ["invalid", "", None, "push", "pull"]
 ```
 
-**Purpose**: Single source of truth for test data constants that need to remain consistent across tests.
+**When to add here:** Constants used by multiple test files or shared validation data.
 
-### 2. HypothesisStrategies
+### 2. HypothesisStrategies - Data Generation
 
-Centralized Hypothesis strategies for property-based testing:
+Create reusable strategies for property-based testing:
 
 ```python
 class HypothesisStrategies:
     """Centralized hypothesis strategies for data model testing."""
-    
-    # Valid data strategies
-    valid_names = st.text(
-        min_size=1, 
-        max_size=255, 
-        alphabet=st.characters(blacklist_categories=("Cc", "Cs"))
-    )
-    
-    # Invalid data strategies  
-    invalid_names = st.one_of(
-        st.just(""),
-        st.text(min_size=256),
-        st.just("   ")
-    )
-    
+
+    # Basic data types
+    valid_names = st.text(min_size=1, max_size=255)
+    valid_emails = st.one_of(st.emails().map(str), git_realistic_emails)
+
     # Domain-specific strategies
-    git_emails = st.one_of(
-        st.emails().map(str),
-        st.text(min_size=1, max_size=50, alphabet=st.characters(...))
+    valid_git_shas = st.text(
+        min_size=4, max_size=64,
+        alphabet="0123456789abcdef"
     )
+
+    valid_change_types = st.sampled_from([
+        "direct", "merge", "squash", "octopus", "rebase"
+    ])
 ```
 
-**Purpose**: Reusable data generation strategies that can be composed for different test scenarios.
+**When to add here:** Reusable data generators that can be composed for different test scenarios.
 
-### 3. DomainTestData
+### 3. TestData Collections - Static Test Data
 
-Static test data collections organized by domain:
+Organize real-world test cases by domain:
 
 ```python
 class GitTestData:
     """Test data specific to Git-related models."""
-    
+
     REALISTIC_EMAILS = [
-        "plainaddress",
-        "user@",
-        "@domain.com",
-        "build-system",
+        "plainaddress",          # No @ symbol (common in Git)
+        "build-system",          # System identifiers
+        "user@internal",         # Internal domains
     ]
-    
+
     CORPORATE_PATTERNS = [
         ("Build System", "build@ci"),
         ("Jenkins", "jenkins"),
+        ("GitHub", "noreply@github.com"),
     ]
 ```
 
-**Purpose**: Curated collections of real-world test cases that represent common patterns.
+**When to add here:** Curated collections of real-world patterns and edge cases.
 
-### 4. Factory Classes
+### 4. Factory Classes - Instance Creation
 
-One factory per data model for consistent instance creation:
+Build consistent test instances with pattern support:
 
 ```python
-class GitActorFactory:
-    """Factory for creating GitActor test instances."""
-    
+class ModelFactory:
+    """Factory for creating Model test instances."""
+
     @staticmethod
     def create(**overrides):
-        """Create GitActor with optional field overrides."""
+        """Create Model with optional field overrides."""
         defaults = {
-            "name": SharedTestConfig.DEFAULT_NAME,
-            "email": SharedTestConfig.DEFAULT_EMAIL,
-            "timestamp": SharedTestConfig.DEFAULT_TIMESTAMP,
+            "field1": SharedTestConfig.DEFAULT_VALUE,
+            "field2": "sensible_default",
         }
         defaults.update(overrides)
-        return GitActor(**defaults)
-    
+        return Model(**defaults)
+
     @staticmethod
-    def create_with_realistic_email(email_index=0):
-        """Create GitActor with Git-realistic email."""
-        email = GitTestData.REALISTIC_EMAILS[
-            email_index % len(GitTestData.REALISTIC_EMAILS)
-        ]
-        return GitActorFactory.create(email=email)
+    def create_from_pattern(pattern_name: str, **overrides):
+        """Create Model based on real-world patterns."""
+        patterns = {
+            "pattern1": lambda **k: ModelFactory.create(field1="specific_value", **k),
+            "pattern2": lambda **k: ModelFactory.create(field2="other_value", **k),
+        }
+        return patterns[pattern_name](**overrides)
 ```
 
-**Purpose**: Consistent, customizable instance creation with sensible defaults.
-
-### 5. TestHelpers
-
-Reusable assertion and utility functions:
-
-```python
-class TestHelpers:
-    """Helper functions for common test patterns."""
-    
-    @staticmethod
-    def assert_validation_error(factory_func, field_name=None, **kwargs):
-        """Assert ValidationError is raised with optional field checking."""
-        with pytest.raises(ValidationError) as exc_info:
-            factory_func(**kwargs)
-        
-        if field_name:
-            error_fields = [error["loc"][0] for error in exc_info.value.errors()]
-            assert field_name in error_fields
-        
-        return exc_info.value
-    
-    @staticmethod
-    def assert_model_immutable(model_instance, field_updates):
-        """Assert that model fields cannot be modified (frozen behavior)."""
-        for field_name, new_value in field_updates.items():
-            with pytest.raises(ValidationError):
-                setattr(model_instance, field_name, new_value)
-```
-
-**Purpose**: Common assertion patterns that reduce code duplication and improve test readability.
-
-### 6. Fixtures
-
-Shared test instances and collections:
-
-```python
-@pytest.fixture
-def default_git_actor():
-    """Default GitActor instance for testing."""
-    return GitActorFactory.create()
-
-@pytest.fixture
-def git_actors_collection():
-    """Collection of various GitActor instances for bulk testing."""
-    return [
-        GitActorFactory.create(),
-        GitActorFactory.create_with_realistic_email(),
-        GitActorFactory.create_corporate_pattern(),
-    ]
-```
-
-**Purpose**: Reusable test data that can be shared across multiple test methods.
-
+**When to add here:** When you need consistent instance creation or want to support workflow patterns.
 ## Testing Categories
 
-### 1. TestModelValidation
+Organize your test classes into these four standardized categories for any data model:
 
-Tests field validation, constraints, and input sanitization:
+### 1. TestModelValidation
+**Purpose:** Test field validation, constraints, and input sanitization
 
 ```python
-class TestGitActorValidation:
-    """Test GitActor field validation and constraints."""
+class TestYourModelValidation:
+    """Test YourModel field validation and constraints."""
 
-    @given(HypothesisStrategies.valid_names, 
-           HypothesisStrategies.git_realistic_emails, 
-           HypothesisStrategies.valid_timestamps)
-    def test_valid_creation(self, name, email, timestamp):
-        """Test that valid inputs create GitActor successfully."""
-        actor = GitActor(name=name, email=email, timestamp=timestamp)
-        
-        assert actor.name == name.strip()
-        assert actor.email == email.lower()
-        assert actor.timestamp == timestamp
+    def test_valid_creation(self):
+        """Test that valid inputs create instances successfully."""
 
-    @given(HypothesisStrategies.invalid_names)
-    def test_invalid_name_rejection(self, invalid_name):
-        """Test that invalid names raise ValidationError."""
-        TestHelpers.assert_validation_error(
-            GitActorFactory.create,
-            field_name="name",
-            name=invalid_name
-        )
+    def test_invalid_field_rejection(self):
+        """Test that invalid fields raise ValidationError."""
+
+    def test_business_logic_validation(self):
+        """Test that field combinations follow business rules."""
 ```
 
-**Focus**: Input validation, field constraints, data transformation.
-
-### 2. TestModelBehavior
-
-Tests core functionality, methods, and expected behaviors:
+### 2. TestModelBehavior  
+**Purpose:** Test core functionality, methods, and expected behaviors
 
 ```python
-class TestGitActorBehavior:
-    """Test GitActor behavior and constraints."""
+class TestYourModelBehavior:
+    """Test YourModel behavior and constraints."""
 
-    def test_immutability(self, default_git_actor):
-        """Test that GitActor is immutable after creation."""
-        field_updates = {
-            "name": "New Name",
-            "email": "new@example.com",
-            "timestamp": datetime.now(),
-        }
-        
-        TestHelpers.assert_model_immutable(default_git_actor, field_updates)
+    def test_immutability(self):
+        """Test that model is immutable after creation."""
 
     def test_string_representation_format(self):
-        """Test __str__ returns proper Git format."""
-        fixed_time = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        actor = GitActorFactory.create(timestamp=fixed_time)
-        
-        expected = "John Doe <john.doe@example.com> 1672574400 +0000"
-        assert str(actor) == expected
+        """Test __str__ returns expected format."""
+
+    def test_method_behavior(self):
+        """Test custom methods work correctly."""
 ```
 
-**Focus**: Method behavior, string representations, model configuration.
-
 ### 3. TestModelEdgeCases
-
-Tests boundary conditions, edge cases, and unusual scenarios:
+**Purpose:** Test boundary conditions, edge cases, and unusual scenarios
 
 ```python
-class TestGitActorEdgeCases:
-    """Test GitActor edge cases and boundary conditions."""
+class TestYourModelEdgeCases:
+    """Test YourModel edge cases and boundary conditions."""
 
     def test_minimum_length_fields(self):
         """Test minimum valid field lengths."""
-        actor = GitActor(name="A", email="a", timestamp=datetime.now())
-        
-        assert actor.name == "A"
-        assert actor.email == "a"
 
-    @pytest.mark.parametrize("name", GitTestData.SPECIAL_NAMES)
-    def test_special_characters_in_name(self, name):
-        """Test special characters commonly found in Git names."""
-        actor = GitActorFactory.create(name=name)
-        assert actor.name == name
+    def test_special_characters(self):
+        """Test special characters and unicode support."""
+
+    def test_real_world_patterns(self):
+        """Test patterns found in production data."""
 ```
-
-**Focus**: Boundary values, special characters, unusual but valid inputs.
 
 ### 4. TestModelFactory
-
-Tests factory functionality and test data generation:
+**Purpose:** Test factory functionality and test data generation
 
 ```python
-class TestGitActorFactory:
-    """Test GitActorFactory functionality."""
+class TestYourModelFactory:
+    """Test YourModelFactory functionality."""
 
-    def test_default_creation(self, default_git_actor):
-        """Test factory creates valid default GitActor."""
-        factory_actor = GitActorFactory.create()
-        
-        assert factory_actor.name == default_git_actor.name
-        assert factory_actor.email == default_git_actor.email
+    def test_default_creation(self):
+        """Test factory creates valid default instances."""
 
-    @given(HypothesisStrategies.valid_names)
-    def test_factory_with_hypothesis(self, name):
+    def test_pattern_based_creation(self):
+        """Test pattern-based factory usage."""
+
+    def test_factory_with_hypothesis(self):
         """Test factory works with hypothesis-generated data."""
-        actor = GitActorFactory.create(name=name)
-        assert actor.name == name.strip()
 ```
-
-**Focus**: Factory method correctness, integration with test data strategies.
 
 ## Best Practices
 
-### 1. Property-Based Testing
+Follow these guidelines when adding new tests:
 
-Use Hypothesis for comprehensive testing:
+### 1. Use Property-Based Testing for Validation
+
+Test with generated data to catch edge cases:
 
 ```python
 @given(HypothesisStrategies.valid_names, HypothesisStrategies.valid_emails)
-def test_model_creation(self, name, email):
+def test_model_creation_invariants(self, name, email):
     """Property-based test for model creation."""
-    model = ModelFactory.create(name=name, email=email)
-    
+    instance = ModelFactory.create(name=name, email=email)
+
     # Test invariants that should always hold
-    assert len(model.name) > 0
-    assert "@" in model.email or model.email in VALID_NON_EMAIL_FORMATS
+    assert len(instance.name.strip()) > 0
+    assert instance.name == name.strip()  # Whitespace normalization
+    assert instance.email == email.lower()  # Email normalization
 ```
 
-### 2. Parametrized Testing
+### 2. Use Parametrized Testing for Multiple Cases
 
-Use parametrization for multiple similar test cases:
+Test multiple similar scenarios efficiently:
 
 ```python
-@pytest.mark.parametrize("invalid_input,expected_error", [
-    ("", "String too short"),
-    ("x" * 300, "String too long"),
-    ("   ", "String is whitespace"),
+@pytest.mark.parametrize("input_value,expected_result", [
+    ("valid_input", "expected_output"),
+    ("edge_case", "edge_result"),
+    ("special_chars", "special_result"),
 ])
-def test_validation_errors(self, invalid_input, expected_error):
-    """Test specific validation error messages."""
-    with pytest.raises(ValidationError, match=expected_error):
-        ModelFactory.create(field=invalid_input)
+def test_field_processing(self, input_value, expected_result):
+    """Test that different inputs produce expected results."""
+    instance = ModelFactory.create(field=input_value)
+    assert instance.processed_field == expected_result
 ```
 
-### 3. Meaningful Test Names
+### 3. Use Descriptive Test Names
 
-Use descriptive test names that explain what is being tested:
+Name tests to explain what they verify:
 
 ```python
-# Good
-def test_email_normalization_converts_uppercase_to_lowercase(self):
-    
-# Better  
-def test_email_field_automatically_converts_uppercase_to_lowercase(self):
+# ✅ Good - explains the behavior being tested
+def test_email_field_converts_uppercase_to_lowercase_for_consistency(self):
 
-# Best
-def test_email_validation_normalizes_uppercase_emails_to_lowercase_for_consistency(self):
+# ❌ Avoid - generic and unclear
+def test_email_validation(self):
 ```
 
-### 4. Test Data Organization
+### 4. Test Both Positive and Negative Cases
 
-Organize test data by domain and use case:
+Always test both success and failure scenarios:
 
 ```python
-class EmailTestData:
-    """Email-specific test data patterns."""
-    
-    VALID_FORMATS = [
-        "user@domain.com",
-        "user.name@domain.com", 
-        "user+tag@domain.com",
-    ]
-    
-    GIT_REALISTIC = [
-        "plainaddress",  # No @ symbol (common in Git)
-        "build-system",  # System identifiers
-    ]
-    
-    CORPORATE_PATTERNS = [
-        "jenkins@ci-server",
-        "deploy-bot@internal",
-    ]
+def test_valid_input_accepted(self):
+    """Test that valid input creates instance successfully."""
+    instance = ModelFactory.create(field="valid_value")
+    assert instance.field == "valid_value"
+
+def test_invalid_input_rejected(self):
+    """Test that invalid input raises appropriate error."""
+    with pytest.raises(ValidationError, match="Expected error message"):
+        ModelFactory.create(field="invalid_value")
 ```
 
-### 5. Error Testing
+### 5. Organize Tests by Single Responsibility
 
-Test both positive and negative cases:
-
-```python
-def test_validation_accepts_valid_input(self):
-    """Test that valid input is accepted."""
-    model = ModelFactory.create(field="valid_value")
-    assert model.field == "valid_value"
-
-def test_validation_rejects_invalid_input(self):
-    """Test that invalid input is rejected with proper error."""
-    TestHelpers.assert_validation_error(
-        ModelFactory.create,
-        field_name="field",
-        field="invalid_value"
-    )
-```
-
-## Examples
-
-### Complete Test Class Example
+Each test class should have one clear purpose:
 
 ```python
-class TestCommitMessageValidation:
-    """Test CommitMessage field validation and constraints."""
+# ✅ Good - clear separation
+class TestModelValidation:
+    """Test field validation only."""
 
-    @given(HypothesisStrategies.valid_commit_messages)
-    def test_valid_commit_message_creation(self, message):
-        """Test that valid commit messages create instances successfully."""
-        commit = CommitMessageFactory.create(message=message)
-        
-        assert commit.message == message.strip()
-        assert len(commit.message) > 0
+class TestModelBehavior:  
+    """Test methods and business logic only."""
 
-    @pytest.mark.parametrize("invalid_message", [
-        "",  # Empty
-        "   ",  # Whitespace only
-        "x" * 1001,  # Too long
-    ])
-    def test_invalid_commit_message_rejection(self, invalid_message):
-        """Test that invalid commit messages raise ValidationError."""
-        TestHelpers.assert_validation_error(
-            CommitMessageFactory.create,
-            field_name="message",
-            message=invalid_message
-        )
-
-    def test_commit_message_whitespace_normalization(self):
-        """Test that leading/trailing whitespace is stripped."""
-        commit = CommitMessageFactory.create(message="  Fix bug  ")
-        assert commit.message == "Fix bug"
-```
-
-### Factory Pattern Example
-
-```python
-class CommitMessageFactory:
-    """Factory for creating CommitMessage test instances."""
-    
-    @staticmethod
-    def create(**overrides):
-        """Create CommitMessage with optional field overrides."""
-        defaults = {
-            "message": SharedTestConfig.DEFAULT_COMMIT_MESSAGE,
-            "author": GitActorFactory.create(),
-            "timestamp": SharedTestConfig.DEFAULT_TIMESTAMP,
-        }
-        defaults.update(overrides)
-        return CommitMessage(**defaults)
-    
-    @staticmethod
-    def create_conventional_commit(commit_type="feat"):
-        """Create CommitMessage following conventional commit format."""
-        message = f"{commit_type}: add new feature"
-        return CommitMessageFactory.create(message=message)
-    
-    @staticmethod
-    def create_with_body_and_footer():
-        """Create CommitMessage with extended format."""
-        message = """feat: add user authentication
-
-Implement OAuth2 authentication flow with Google and GitHub providers.
-Includes user session management and token refresh.
-
-Closes #123
-Co-authored-by: Jane Doe <jane@example.com>"""
-        return CommitMessageFactory.create(message=message)
+# ❌ Avoid - mixed responsibilities
+class TestModel:
+    """Tests everything - hard to navigate."""
 ```
 
 ## Adding New Tests
 
-### Step 1: Extend Configuration
+Follow this step-by-step process to add tests for new models or functionality:
 
-Add new constants to `SharedTestConfig`:
+### Step 1: Determine Test Location
+
+**For new data models:**
+- Create `test_{model_name}.py` (e.g., `test_repository.py`)
+- Use existing domain files for related functionality
+
+**For existing models:**
+- Add to appropriate existing test file
+- Extend factory methods in `test_factories.py`
+
+### Step 2: Add Shared Configuration
+
+Update `conftest.py` with constants your tests will need:
 
 ```python
 class SharedTestConfig:
     # ...existing config...
-    
-    # New model defaults
-    DEFAULT_REPOSITORY_URL = "https://github.com/user/repo.git"
-    DEFAULT_BRANCH_NAME = "main"
-    DEFAULT_TAG_NAME = "v1.0.0"
+
+    # Your new model defaults
+    DEFAULT_NEW_FIELD = "sensible_default"
+    VALID_NEW_OPTIONS = ["option1", "option2", "option3"]
+    INVALID_NEW_OPTIONS = ["invalid", "", None]
 ```
 
-### Step 2: Add Hypothesis Strategies
+### Step 3: Create Hypothesis Strategies
 
-Extend `HypothesisStrategies` with new data generators:
+Add data generation strategies to `test_strategies.py`:
 
 ```python
 class HypothesisStrategies:
     # ...existing strategies...
-    
-    # New strategies
-    valid_urls = st.text(min_size=10).map(lambda x: f"https://{x}.com")
-    valid_branch_names = st.text(
-        min_size=1,
-        max_size=100,
-        alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), 
-                              whitelist_characters="-_/")
-    ).filter(lambda x: not x.startswith('/') and not x.endswith('/'))
+
+    # Your new field strategies
+    valid_new_fields = st.text(min_size=1, max_size=100)
+    valid_new_options = st.sampled_from(["option1", "option2", "option3"])
 ```
 
-### Step 3: Create Test Data Collections
+### Step 4: Add Test Data Collections
 
-Add domain-specific test data:
+Create domain-specific test data in `test_data.py`:
 
 ```python
-class RepositoryTestData:
-    """Test data specific to repository-related models."""
-    
-    COMMON_URLS = [
-        "https://github.com/user/repo.git",
-        "git@github.com:user/repo.git",
-        "https://gitlab.com/user/repo.git",
+class YourDomainTestData:
+    """Test data specific to your domain."""
+
+    COMMON_PATTERNS = [
+        "pattern1",
+        "pattern2",
+        "pattern3",
     ]
-    
-    BRANCH_PATTERNS = [
-        "main",
-        "develop", 
-        "feature/add-authentication",
-        "bugfix/fix-login-issue",
-        "release/v1.2.0",
+
+    EDGE_CASES = [
+        "edge_case_1",
+        "edge_case_2",
     ]
 ```
 
-### Step 4: Create Factory Class
+### Step 5: Create Factory Class
 
-Implement factory for the new model:
+Add factory to `test_factories.py`:
 
 ```python
-class RepositoryFactory:
-    """Factory for creating Repository test instances."""
-    
+class YourModelFactory:
+    """Factory for creating YourModel test instances."""
+
     @staticmethod
     def create(**overrides):
-        """Create Repository with optional field overrides."""
+        """Create YourModel with optional field overrides."""
         defaults = {
-            "url": SharedTestConfig.DEFAULT_REPOSITORY_URL,
-            "branch": SharedTestConfig.DEFAULT_BRANCH_NAME,
-            "name": "test-repo",
+            "field1": SharedTestConfig.DEFAULT_VALUE,
+            "field2": "another_default",
         }
         defaults.update(overrides)
-        return Repository(**defaults)
-    
+        return YourModel(**defaults)
+
     @staticmethod
-    def create_github_repo():
-        """Create Repository with GitHub-specific patterns."""
-        return RepositoryFactory.create(
-            url="https://github.com/owner/repo.git",
-            name="repo"
-        )
+    def create_from_pattern(pattern_name: str, **overrides):
+        """Create YourModel based on real-world patterns."""
+        patterns = {
+            "pattern1": lambda **k: YourModelFactory.create(field1="specific", **k),
+            "pattern2": lambda **k: YourModelFactory.create(field2="other", **k),
+        }
+        return patterns[pattern_name](**overrides)
 ```
 
-### Step 5: Implement Test Classes
+### Step 6: Create Test File
 
-Create the four standard test classes:
+Create your test file with the four standard test classes:
 
 ```python
-class TestRepositoryValidation:
-    """Test Repository field validation and constraints."""
-    
-    @given(HypothesisStrategies.valid_urls)
-    def test_valid_url_acceptance(self, url):
-        """Test that valid URLs are accepted."""
-        repo = RepositoryFactory.create(url=url)
-        assert repo.url == url
+"""Tests for YourModel data model."""
 
-class TestRepositoryBehavior:
-    """Test Repository behavior and constraints."""
-    
-    def test_url_parsing_extracts_name(self):
-        """Test that repository name is extracted from URL."""
-        repo = RepositoryFactory.create(url="https://github.com/user/my-repo.git")
-        assert repo.name == "my-repo"
+import pytest
+from pydantic import ValidationError
 
-class TestRepositoryEdgeCases:
-    """Test Repository edge cases and boundary conditions."""
-    
-    @pytest.mark.parametrize("url", RepositoryTestData.COMMON_URLS)
-    def test_common_url_formats(self, url):
-        """Test common repository URL formats."""
-        repo = RepositoryFactory.create(url=url)
-        assert repo.url == url
+from your_module.models import YourModel
+from .conftest import SharedTestConfig
+from .test_strategies import HypothesisStrategies
+from .test_data import YourDomainTestData
+from .test_factories import YourModelFactory
 
-class TestRepositoryFactory:
-    """Test RepositoryFactory functionality."""
-    
-    def test_github_repo_factory(self):
-        """Test GitHub-specific repository factory."""
-        repo = RepositoryFactory.create_github_repo()
-        assert "github.com" in repo.url
+
+class TestYourModelValidation:
+    """Test YourModel field validation and constraints."""
+
+    def test_valid_creation(self):
+        """Test that valid inputs create YourModel successfully."""
+        # ...test implementation
+
+
+class TestYourModelBehavior:
+    """Test YourModel behavior and constraints."""
+
+    def test_string_representation(self):
+        """Test __str__ returns expected format."""
+        # ...test implementation
+
+
+class TestYourModelEdgeCases:
+    """Test YourModel edge cases and boundary conditions."""
+
+    def test_boundary_values(self):
+        """Test minimum and maximum valid values."""
+        # ...test implementation
+
+
+class TestYourModelFactory:
+    """Test YourModelFactory functionality."""
+
+    def test_default_creation(self):
+        """Test factory creates valid default instances."""
+        # ...test implementation
 ```
 
-### Step 6: Add Fixtures
+### Step 7: Add Fixtures (if needed)
 
-Create fixtures for the new model:
+Add fixtures to `conftest.py` for shared test data:
 
 ```python
 @pytest.fixture
-def default_repository():
-    """Default Repository instance for testing."""
-    return RepositoryFactory.create()
-
-@pytest.fixture
-def repository_collection():
-    """Collection of various Repository instances for bulk testing."""
-    return [
-        RepositoryFactory.create(),
-        RepositoryFactory.create_github_repo(),
-        RepositoryFactory.create(url="https://gitlab.com/user/repo.git"),
-    ]
+def default_your_model():
+    """Default YourModel instance for testing."""
+    from .test_factories import YourModelFactory
+    return YourModelFactory.create()
 ```
 
-## Conclusion
+### Step 8: Run and Validate Tests
 
-This testing pattern provides:
+```bash
+# Run only your new tests
+uv run pytest tests/data_models/test_your_model.py -v
 
-- **Consistency** across all test files
-- **Reusability** of test data and utilities
-- **Scalability** for adding new models and tests
-- **Maintainability** through clear organization
-- **Comprehensive coverage** with property-based testing
+# Run all tests to ensure no regressions  
+uv run pytest tests/data_models/ -v
 
-Follow this guide when adding new tests to ensure consistency and quality across the entire test suite.
+# Check coverage
+uv run pytest tests/data_models/ --cov=src --cov-report=html
+```
+
+### Quick Reference Checklist
+
+When adding tests, ensure you have:
+
+- [ ] **Four test classes**: Validation, Behavior, EdgeCases, Factory
+- [ ] **Property-based tests**: Using Hypothesis strategies
+- [ ] **Parametrized tests**: For multiple similar cases
+- [ ] **Error testing**: Both positive and negative cases
+- [ ] **Factory methods**: For consistent instance creation
+- [ ] **Descriptive test names**: Explaining what is being tested
+- [ ] **Shared constants**: In SharedTestConfig for reusable values
+
+## Examples
+
+### Complete Test Class Structure
+
+```python
+class TestModelValidation:
+    """Test Model field validation and constraints."""
+
+    @given(HypothesisStrategies.valid_fields)
+    def test_valid_creation(self, field_value):
+        """Test that valid inputs create Model successfully."""
+        instance = ModelFactory.create(field=field_value)
+        assert instance.field == field_value
+
+    @pytest.mark.parametrize("invalid_input,expected_error", [
+        ("", "Field cannot be empty"),
+        (None, "Field is required"),
+        ("x" * 300, "Field too long"),
+    ])
+    def test_invalid_field_rejection(self, invalid_input, expected_error):
+        """Test that invalid fields raise ValidationError."""
+        with pytest.raises(ValidationError, match=expected_error):
+            ModelFactory.create(field=invalid_input)
+```
+
+### Factory with Pattern Support
+
+```python
+class ModelFactory:
+    """Factory for creating Model test instances."""
+
+    @staticmethod
+    def create(**overrides):
+        """Create Model with intelligent defaults."""
+        defaults = {
+            "field1": SharedTestConfig.DEFAULT_VALUE,
+            "field2": "default_value",
+        }
+        defaults.update(overrides)
+        return Model(**defaults)
+
+    @staticmethod
+    def create_from_pattern(pattern_name: str, **overrides):
+        """Create Model based on real-world patterns."""
+        patterns = {
+            "common": lambda **k: ModelFactory.create(field1="common_value", **k),
+            "edge_case": lambda **k: ModelFactory.create(field1="edge_value", **k),
+        }
+
+        if pattern_name not in patterns:
+            raise ValueError(f"Unknown pattern: {pattern_name}")
+
+        return patterns[pattern_name](**overrides)
+```
+
+### Property-Based Testing
+
+```python
+@given(HypothesisStrategies.valid_names, HypothesisStrategies.valid_emails)
+def test_model_invariants(self, name, email):
+    """Test invariants that should always hold."""
+    instance = ModelFactory.create(name=name, email=email)
+
+    # These should always be true regardless of input
+    assert len(instance.name.strip()) > 0
+    assert instance.name == name.strip()
+    assert instance.email == email.lower()
+```
+
+---
+
+## Summary
+
+This guide provides the essential patterns for adding new tests to the project:
+
+1. **Follow the four-class structure** for each domain (Validation, Behavior, EdgeCases, Factory)
+2. **Use shared infrastructure** (SharedTestConfig, HypothesisStrategies, TestData, Factories)
+3. **Apply best practices** (property-based testing, descriptive names, error testing)
+4. **Follow the step-by-step process** for adding new models or extending existing ones
+
+By following these patterns, you ensure that new tests integrate seamlessly with the existing test suite while maintaining consistency, quality, and maintainability as the codebase grows.
