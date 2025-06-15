@@ -10,7 +10,7 @@ from pydantic import BeforeValidator
 class SHAValidationLimits:
     """Constants for SHA validation limits."""
 
-    MIN_LENGTH = 4   # Minimum Git SHA length (short form)
+    MIN_LENGTH = 4  # Minimum Git SHA length (short form)
     MAX_LENGTH = 64  # Maximum Git SHA length (extended)
 
 

@@ -219,3 +219,137 @@ class HypothesisStrategies:
 
     # Merge base strategies (reuse GitSHA strategies)
     valid_merge_bases = st.one_of(st.none(), valid_git_shas)
+
+    # FileModification strategies
+    valid_file_paths = st.text(
+        min_size=1,
+        max_size=100,
+        alphabet=st.characters(
+            whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="/-_."
+        ),
+    ).filter(
+        lambda x: (
+            len(x.strip()) > 0
+            and "\x00" not in x  # No null bytes
+            and len(x.strip().replace("\\", "/")) <= 4096  # Under path limit
+        )
+    )
+
+    # File path edge cases for testing validation
+    invalid_file_paths = st.one_of(
+        st.just(""),  # Empty string
+        st.just("  "),  # Whitespace only
+        st.text(min_size=4097, max_size=5000),  # Too long
+        st.text(min_size=1, max_size=20).filter(
+            lambda x: "\x00" in x  # Contains null bytes
+        ),
+    )
+
+    # Unicode and special character paths for edge case testing
+    unicode_file_paths = st.text(
+        min_size=1,
+        max_size=50,
+        alphabet=st.characters(
+            whitelist_categories=("Lu", "Ll", "Nd", "Pc", "Pd"),
+            whitelist_characters="/-_.αβγδεζηθικλμνξοπρστυφχψω中文日本語한글",
+        ),
+    ).filter(lambda x: len(x.strip()) > 0 and "\x00" not in x)
+
+    # Modification type strategies
+    valid_modification_types = st.sampled_from(
+        [
+            "A",  # Addition
+            "C",  # Copy
+            "D",  # Deletion
+            "M",  # Modification
+            "R",  # Rename
+            "T",  # Type change
+            "U",  # Unmerged
+            "X",  # Unknown
+            "B",  # Broken pairing
+        ]
+    )
+
+    invalid_modification_types = st.one_of(
+        st.just(""),  # Empty string
+        st.just("Z"),  # Invalid type
+        st.text(min_size=1, max_size=5).filter(
+            lambda x: x.upper() not in ["A", "C", "D", "M", "R", "T", "U", "X", "B"]
+        ),
+    )
+
+    # Line count strategies
+    valid_line_counts = st.integers(min_value=0, max_value=10000)
+
+    # Large line counts for stress testing
+    large_line_counts = st.integers(min_value=10000, max_value=100000)
+
+    invalid_line_counts = st.integers(max_value=-1)
+
+    # Patch content strategies
+    valid_patch_content = st.one_of(
+        st.none(),
+        st.text(min_size=1, max_size=1000).filter(lambda x: x.strip()),
+        # Realistic patch format
+        st.builds(
+            lambda added, removed: (
+                f"@@ -1,{removed} +1,{added} @@\n"
+                + "\n".join([f"-old_line_{i}" for i in range(min(removed, 5))])
+                + "\n"
+                + "\n".join([f"+new_line_{i}" for i in range(min(added, 5))])
+            ),
+            st.integers(min_value=0, max_value=10),
+            st.integers(min_value=0, max_value=10),
+        ),
+    )
+
+    # Simple file modification dictionaries for testing
+    valid_added_file_data = st.builds(
+        lambda path_after, insertions, patch: {
+            "path_before": None,
+            "path_after": path_after,
+            "modification_type": "A",
+            "insertions": insertions,
+            "deletions": 0,
+            "patch": patch,
+        },
+        valid_file_paths,
+        valid_line_counts,
+        valid_patch_content,
+    )
+
+    valid_deleted_file_data = st.builds(
+        lambda path_before, deletions, patch: {
+            "path_before": path_before,
+            "path_after": None,
+            "modification_type": "D",
+            "insertions": 0,
+            "deletions": deletions,
+            "patch": patch,
+        },
+        valid_file_paths,
+        valid_line_counts,
+        valid_patch_content,
+    )
+
+    valid_modified_file_data = st.builds(
+        lambda path, insertions, deletions, patch: {
+            "path_before": path,
+            "path_after": path,
+            "modification_type": "M",
+            "insertions": insertions,
+            "deletions": deletions,
+            "patch": patch,
+        },
+        valid_file_paths,
+        valid_line_counts,
+        valid_line_counts,
+        valid_patch_content,
+    )
+
+    # Combined strategy for any valid file modification
+    valid_file_modification_data = st.one_of(
+        valid_added_file_data,
+        valid_deleted_file_data,
+        valid_modified_file_data,
+    )

@@ -19,6 +19,9 @@ class ValidationLimits:
     # ChangeMetadata field limits
     BRANCH_NAME_MIN_LENGTH = 1
 
+    # FileModification field limits
+    PATH_MAX_LENGTH = 4096  # Common filesystem path limit
+
 
 class GitActor(BaseModel):
     """Represents Git author/committer information with validation and immutability."""
@@ -262,4 +265,277 @@ class ChangeMetadata(BaseModel):
             f"target_branch='{self.target_branch}', "
             f"merge_base={self.merge_base!r}, "
             f"pull_request_id={self.pull_request_id!r})"
+        )
+
+
+class FileModification(BaseModel):
+    """Represents modifications to a single file with validation."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    path_before: str | None = Field(
+        default=None, description="File path before modification (None if added)"
+    )
+    path_after: str | None = Field(
+        default=None, description="File path after modification (None if deleted)"
+    )
+    modification_type: Literal[
+        "A",  # Addition of a file
+        "C",  # Copy of a file into a new one
+        "D",  # Deletion of a file
+        "M",  # Modification of the contents or mode of a file
+        "R",  # Renaming of a file
+        "T",  # Change in the type of the file (regular file, symlink, submodule)
+        "U",  # File is unmerged (must complete merge before commit)
+        "X",  # Unknown change type (likely a bug)
+        "B",  # Have had their pairing broken
+    ] = Field(..., description="Git modification type")
+    insertions: int = Field(
+        ...,
+        ge=0,
+        description="Lines added to this file",
+    )
+    deletions: int = Field(
+        ...,
+        ge=0,
+        description="Lines removed from this file",
+    )
+    patch: str | None = Field(
+        default=None,
+        description="Unified diff patch text for this file",
+        # TODO: Add patch format validation once we have more clarity
+    )
+
+    @field_validator("path_before", "path_after")
+    @classmethod
+    def validate_file_paths(cls, v: str | None) -> str | None:
+        """Validate file paths when provided."""
+        if v is None:
+            return None
+
+        # Normalize path separators and strip whitespace
+        normalized = v.strip().replace("\\", "/")
+
+        if not normalized:
+            return None
+
+        # Basic git path validation
+        if len(normalized) > ValidationLimits.PATH_MAX_LENGTH:
+            raise ValueError(
+                f"Path too long: maximum {ValidationLimits.PATH_MAX_LENGTH} characters"
+            )
+
+        # Git doesn't allow null bytes in paths
+        if "\x00" in normalized:
+            raise ValueError("Path cannot contain null bytes")
+
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_business_logic(self) -> "FileModification":
+        """Validate business logic constraints between fields."""
+        # Added files should have no path_before
+        if self.modification_type == "A" and self.path_before is not None:
+            raise ValueError("Added files (type 'A') cannot have path_before")
+
+        # Deleted files should have no path_after
+        if self.modification_type == "D" and self.path_after is not None:
+            raise ValueError("Deleted files (type 'D') cannot have path_after")
+
+        # Added files must have path_after
+        if self.modification_type == "A" and self.path_after is None:
+            raise ValueError("Added files (type 'A') must have path_after")
+
+        # Deleted files must have path_before
+        if self.modification_type == "D" and self.path_before is None:
+            raise ValueError("Deleted files (type 'D') must have path_before")
+
+        # Renamed/copied files should have both paths and be different
+        if self.modification_type in ["R", "C"]:
+            if self.path_before is None or self.path_after is None:
+                raise ValueError(
+                    f"{self.modification_type} files must have both "
+                    "path_before and path_after"
+                )
+            if self.path_before == self.path_after:
+                raise ValueError(
+                    f"{self.modification_type} files must have different "
+                    "path_before and path_after"
+                )
+
+        # Modified files should have both paths
+        if self.modification_type == "M" and (
+            self.path_before is None or self.path_after is None
+        ):
+            raise ValueError(
+                "Modified files (type 'M') must have both path_before and path_after"
+            )
+
+        # Unmerged files should have path_after
+        if self.modification_type == "U" and self.path_after is None:
+            raise ValueError("Unmerged files (type 'U') must have path_after")
+
+        return self
+
+    def get_effective_path(self) -> str:
+        """Get the effective file path for this modification."""
+        if self.path_after is not None:
+            return self.path_after
+        if self.path_before is not None:
+            return self.path_before
+        raise ValueError("FileModification must have at least one path")
+
+    def get_all_paths(self) -> list[str]:
+        """Get all paths associated with this modification."""
+        paths = []
+        if self.path_before is not None:
+            paths.append(self.path_before)
+        if self.path_after is not None and self.path_after != self.path_before:
+            paths.append(self.path_after)
+        return paths
+
+    def is_rename_or_copy(self) -> bool:
+        """Check if this modification is a rename or copy operation."""
+        return self.modification_type in ["R", "C"]
+
+    def __str__(self) -> str:
+        """Returns the modification in a compact format."""
+        if self.modification_type == "A":
+            return f"A {self.path_after} (+{self.insertions})"
+        if self.modification_type == "D":
+            return f"D {self.path_before} (-{self.deletions})"
+        if self.modification_type in ["R", "C"]:
+            return (
+                f"{self.modification_type} {self.path_before} → "
+                f"{self.path_after} (+{self.insertions}/-{self.deletions})"
+            )
+        path = self.get_effective_path()
+        return f"{self.modification_type} {path} (+{self.insertions}/-{self.deletions})"
+
+    def __repr__(self) -> str:
+        """Detailed representation for debugging."""
+        return (
+            f"FileModification(modification_type='{self.modification_type}', "
+            f"path_before={self.path_before!r}, "
+            f"path_after={self.path_after!r}, "
+            f"insertions={self.insertions}, deletions={self.deletions}, "
+            f"patch={'<patch>' if self.patch else 'None'})"
+        )
+
+
+class Diff(BaseModel):
+    """Collection of file modifications with aggregated metrics."""
+
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    modifications: list[FileModification] = Field(
+        default_factory=list, description="Per-file modification details"
+    )
+    # TODO: Implement cross-validation between modifications and counts
+    files_changed_count: int = Field(..., ge=0, description="Count of affected files")
+    insertions_count: int = Field(..., ge=0, description="Total lines added")
+    deletions_count: int = Field(..., ge=0, description="Total lines removed")
+    affected_paths: list[tuple[str | None, str | None]] = Field(
+        default_factory=list,
+        description="List of (path_before, path_after) tuples",
+    )
+
+    @field_validator("affected_paths")
+    @classmethod
+    def validate_affected_paths(
+        cls, v: list[tuple[str | None, str | None]]
+    ) -> list[tuple[str | None, str | None]]:
+        """Validate affected paths format."""
+        for path_tuple in v:
+            if not isinstance(path_tuple, tuple) or len(path_tuple) != 2:
+                raise ValueError(
+                    "Each affected_paths entry must be a tuple of "
+                    "(path_before, path_after)"
+                )
+            path_before, path_after = path_tuple
+            if path_before is None and path_after is None:
+                raise ValueError("At least one path in each tuple must be non-None")
+        return v
+
+    @model_validator(mode="after")
+    def validate_aggregated_metrics(self) -> "Diff":
+        """Validate that aggregated metrics are consistent."""
+        # Check that we have some modifications if counts > 0
+        if self.files_changed_count > 0 and not self.modifications:
+            raise ValueError("Must have modifications if files_changed_count > 0")
+
+        if (
+            self.insertions_count > 0 or self.deletions_count > 0
+        ) and not self.modifications:
+            raise ValueError(
+                "Must have modifications if insertions_count or deletions_count > 0"
+            )
+
+        return self
+
+    def is_empty(self) -> bool:
+        """Check if this diff represents no changes."""
+        return (
+            self.files_changed_count == 0
+            and self.insertions_count == 0
+            and self.deletions_count == 0
+            and len(self.modifications) == 0
+        )
+
+    def get_total_changes(self) -> int:
+        """Get total number of line changes (insertions + deletions)."""
+        return self.insertions_count + self.deletions_count
+
+    def get_modification_types(self) -> set[str]:
+        """Get unique modification types present in this diff."""
+        return {mod.modification_type for mod in self.modifications}
+
+    def get_renamed_files(self) -> list[FileModification]:
+        """Get all file modifications that are renames."""
+        return [mod for mod in self.modifications if mod.modification_type == "R"]
+
+    def get_copied_files(self) -> list[FileModification]:
+        """Get all file modifications that are copies."""
+        return [mod for mod in self.modifications if mod.modification_type == "C"]
+
+    def get_all_affected_paths(self) -> list[str]:
+        """Get a flattened list of all unique paths affected by this diff."""
+        all_paths = set()
+        for path_before, path_after in self.affected_paths:
+            if path_before is not None:
+                all_paths.add(path_before)
+            if path_after is not None:
+                all_paths.add(path_after)
+        return sorted(all_paths)
+
+    def __str__(self) -> str:
+        """Returns the diff in a compact format."""
+        if self.is_empty():
+            return "Empty diff"
+
+        files_word = "file" if self.files_changed_count == 1 else "files"
+        changes_parts = []
+
+        if self.insertions_count > 0:
+            changes_parts.append(f"{self.insertions_count} insertions(+)")
+        if self.deletions_count > 0:
+            changes_parts.append(f"{self.deletions_count} deletions(-)")
+
+        changes_str = ", ".join(changes_parts) if changes_parts else "no line changes"
+
+        return f"{self.files_changed_count} {files_word} changed, {changes_str}"
+
+    def __repr__(self) -> str:
+        """Detailed representation for debugging."""
+        return (
+            f"Diff(files_changed={self.files_changed_count}, "
+            f"insertions={self.insertions_count}, "
+            f"deletions={self.deletions_count}, "
+            f"modifications_count={len(self.modifications)}, "
+            f"affected_paths_count={len(self.affected_paths)})"
         )

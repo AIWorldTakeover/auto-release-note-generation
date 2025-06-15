@@ -5,12 +5,14 @@ from typing import Any
 
 from auto_release_note_generation.data_models.shared import (
     ChangeMetadata,
+    Diff,
+    FileModification,
     GitActor,
     GitMetadata,
 )
 
 from .conftest import SharedTestConfig
-from .test_data import GitTestData
+from .test_data import FileTestData, GitTestData
 
 
 class GitActorFactory:
@@ -332,3 +334,285 @@ class ChangeMetadataFactory:
 
         factory_func = pattern_mapping[pattern_name]
         return factory_func(**overrides)
+
+
+class FileModificationFactory:
+    """Factory for creating FileModification test instances."""
+
+    @staticmethod
+    def create(**overrides: Any) -> "FileModification":
+        """Create FileModification with optional field overrides."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_after": "src/file.py",
+            "modification_type": "M",
+            "insertions": 5,
+            "deletions": 3,
+            "path_before": "src/file.py",
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_added_file(**overrides: Any) -> "FileModification":
+        """Create FileModification for an added file."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_before": None,
+            "path_after": "src/new_file.py",
+            "modification_type": "A",
+            "insertions": 10,
+            "deletions": 0,
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_deleted_file(**overrides: Any) -> "FileModification":
+        """Create FileModification for a deleted file."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_before": "src/old_file.py",
+            "path_after": None,
+            "modification_type": "D",
+            "insertions": 0,
+            "deletions": 15,
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_modified_file(**overrides: Any) -> "FileModification":
+        """Create FileModification for a modified file."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_before": "src/file.py",
+            "path_after": "src/file.py",
+            "modification_type": "M",
+            "insertions": 8,
+            "deletions": 5,
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_renamed_file(**overrides: Any) -> "FileModification":
+        """Create FileModification for a renamed file."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_before": "src/old_name.py",
+            "path_after": "src/new_name.py",
+            "modification_type": "R",
+            "insertions": 2,
+            "deletions": 1,
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_copied_file(**overrides: Any) -> "FileModification":
+        """Create FileModification for a copied file."""
+        from auto_release_note_generation.data_models.shared import FileModification
+
+        defaults: dict[str, Any] = {
+            "path_before": "src/template.py",
+            "path_after": "src/copy.py",
+            "modification_type": "C",
+            "insertions": 5,
+            "deletions": 0,
+        }
+        defaults.update(overrides)
+        return FileModification(**defaults)
+
+    @staticmethod
+    def create_with_realistic_path(
+        path_index: int = 0, **overrides: Any
+    ) -> "FileModification":
+        """Create FileModification with realistic file path."""
+        path = FileTestData.REALISTIC_FILE_PATHS[
+            path_index % len(FileTestData.REALISTIC_FILE_PATHS)
+        ]
+        return FileModificationFactory.create_modified_file(
+            path_before=path, path_after=path, **overrides
+        )
+
+    @staticmethod
+    def create_from_scenario(
+        scenario_index: int = 0, **overrides: Any
+    ) -> "FileModification":
+        """Create FileModification from realistic scenario."""
+        scenario = FileTestData.MODIFICATION_TYPE_SCENARIOS[
+            scenario_index % len(FileTestData.MODIFICATION_TYPE_SCENARIOS)
+        ]
+        mod_type, path_before, path_after, insertions, deletions = scenario
+
+        defaults: dict[str, Any] = {
+            "modification_type": mod_type,
+            "path_before": path_before,
+            "path_after": path_after,
+            "insertions": insertions,
+            "deletions": deletions,
+        }
+        defaults.update(overrides)
+        return FileModificationFactory.create(**defaults)
+
+    @staticmethod
+    def create_with_unicode_path(**overrides: Any) -> "FileModification":
+        """Create FileModification with Unicode file path."""
+        path = FileTestData.UNICODE_FILE_PATHS[0]
+        return FileModificationFactory.create_modified_file(
+            path_before=path, path_after=path, **overrides
+        )
+
+
+class DiffFactory:
+    """Factory for creating Diff test instances."""
+
+    @staticmethod
+    def create(**overrides: Any) -> "Diff":
+        """Create Diff with optional field overrides."""
+        from auto_release_note_generation.data_models.shared import Diff
+
+        mod = FileModificationFactory.create_modified_file()
+        defaults: dict[str, Any] = {
+            "modifications": [mod],
+            "files_changed_count": 1,
+            "insertions_count": mod.insertions,
+            "deletions_count": mod.deletions,
+            "affected_paths": [(mod.path_before, mod.path_after)],
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)
+
+    @staticmethod
+    def create_empty(**overrides: Any) -> "Diff":
+        """Create empty Diff."""
+        from auto_release_note_generation.data_models.shared import Diff
+
+        defaults: dict[str, Any] = {
+            "modifications": [],
+            "files_changed_count": 0,
+            "insertions_count": 0,
+            "deletions_count": 0,
+            "affected_paths": [],
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)
+
+    @staticmethod
+    def create_single_file(**overrides: Any) -> "Diff":
+        """Create Diff with single file modification."""
+        from auto_release_note_generation.data_models.shared import Diff
+
+        mod = FileModificationFactory.create_added_file()
+        defaults: dict[str, Any] = {
+            "modifications": [mod],
+            "files_changed_count": 1,
+            "insertions_count": mod.insertions,
+            "deletions_count": mod.deletions,
+            "affected_paths": [(mod.path_before, mod.path_after)],
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)
+
+    @staticmethod
+    def create_multi_file(file_count: int = 3, **overrides: Any) -> "Diff":
+        """Create Diff with multiple file modifications."""
+        from auto_release_note_generation.data_models.shared import Diff
+
+        modifications = []
+        total_insertions = 0
+        total_deletions = 0
+        affected_paths = []
+
+        for i in range(file_count):
+            mod = FileModificationFactory.create_modified_file(
+                path_before=f"src/file_{i}.py",
+                path_after=f"src/file_{i}.py",
+                insertions=5 + i,
+                deletions=2 + i,
+            )
+            modifications.append(mod)
+            total_insertions += mod.insertions
+            total_deletions += mod.deletions
+            affected_paths.append((mod.path_before, mod.path_after))
+
+        defaults: dict[str, Any] = {
+            "modifications": modifications,
+            "files_changed_count": file_count,
+            "insertions_count": total_insertions,
+            "deletions_count": total_deletions,
+            "affected_paths": affected_paths,
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)
+
+    @staticmethod
+    def create_large_diff(file_count: int = 100, **overrides: Any) -> "Diff":
+        """Create large Diff for performance testing."""
+        from auto_release_note_generation.data_models.shared import Diff
+
+        modifications = []
+        affected_paths = []
+
+        for i in range(file_count):
+            mod = FileModificationFactory.create_added_file(
+                path_after=f"src/generated_file_{i}.py",
+                insertions=10,
+                deletions=0,
+            )
+            modifications.append(mod)
+            affected_paths.append((mod.path_before, mod.path_after))
+
+        defaults: dict[str, Any] = {
+            "modifications": modifications,
+            "files_changed_count": file_count,
+            "insertions_count": file_count * 10,
+            "deletions_count": 0,
+            "affected_paths": affected_paths,
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)
+
+    @staticmethod
+    def create_from_scenario_pattern(
+        pattern_index: int = 0, **overrides: Any
+    ) -> "Diff":
+        """Create Diff from large diff pattern."""
+        pattern = FileTestData.LARGE_DIFF_PATTERNS[
+            pattern_index % len(FileTestData.LARGE_DIFF_PATTERNS)
+        ]
+
+        modifications = []
+        total_insertions = 0
+        total_deletions = 0
+        affected_paths = []
+
+        for mod_data in pattern["modifications"]:  # type: ignore[index]
+            mod_type, path_before, path_after, insertions, deletions = mod_data
+            mod = FileModification(
+                modification_type=mod_type,
+                path_before=path_before,
+                path_after=path_after,
+                insertions=insertions,
+                deletions=deletions,
+            )
+            modifications.append(mod)
+            total_insertions += insertions
+            total_deletions += deletions
+            affected_paths.append((path_before, path_after))
+
+        defaults: dict[str, Any] = {
+            "modifications": modifications,
+            "files_changed_count": len(modifications),
+            "insertions_count": total_insertions,
+            "deletions_count": total_deletions,
+            "affected_paths": affected_paths,
+        }
+        defaults.update(overrides)
+        return Diff(**defaults)

@@ -274,3 +274,215 @@ class ChangeTestData:
         "def456abc789def123abc456def789abc123ab",
         "123456789abcdef123456789abcdef123456789",
     ]
+
+
+class FileTestData:
+    """Test data specific to FileModification and Diff models."""
+
+    # Realistic file paths from real-world projects
+    REALISTIC_FILE_PATHS = [
+        # Standard programming files
+        "src/main.py",
+        "lib/utils.js",
+        "include/header.h",
+        "tests/test_file.py",
+        "docs/README.md",
+        "config/settings.json",
+        # Deep nested paths
+        "src/auto_release_note_generation/data_models/shared.py",
+        "tests/data_models/test_file_diff.py",
+        "frontend/src/components/UserProfile/UserProfile.tsx",
+        "backend/api/v1/endpoints/users.py",
+        # Common web development patterns
+        "public/index.html",
+        "static/css/main.css",
+        "assets/images/logo.png",
+        "node_modules/package/dist/index.js",
+        # Configuration and build files
+        ".github/workflows/ci.yml",
+        "docker/Dockerfile",
+        "scripts/deploy.sh",
+        "Makefile",
+        ".gitignore",
+        "pyproject.toml",
+        "package.json",
+        "requirements.txt",
+        # Documentation patterns
+        "docs/api/endpoints.md",
+        "README.rst",
+        "CHANGELOG.md",
+        "LICENSE",
+        "CONTRIBUTING.md",
+    ]
+
+    # Unicode and international file paths
+    UNICODE_FILE_PATHS = [
+        "docs/中文文档.md",
+        "src/модуль.py",
+        "tests/тест.js",
+        "assets/日本語.png",
+        "config/설정.json",
+        "data/données.csv",
+        "scripts/εργαλεία.sh",
+        "templates/шаблон.html",
+    ]
+
+    # Edge case file paths
+    EDGE_CASE_PATHS = [
+        # Very short paths
+        "a",
+        "x.py",
+        "1.js",
+        # Paths with special characters (valid in Git)
+        "file-with-dashes.py",
+        "file_with_underscores.js",
+        "file.with.dots.md",
+        "folder/sub-folder/file-name.ext",
+        # Mixed case and numbers
+        "CamelCaseFile.Java",
+        "UPPER_CASE.SQL",
+        "file123.txt",
+        "test_file_v2.py",
+        # Common prefixes/suffixes
+        "test_something.py",
+        "something_test.js",
+        "TestSomething.java",
+        "SomethingTest.cpp",
+        "__init__.py",
+        "main.go",
+        "index.html",
+        "style.css",
+        # Long but realistic paths
+        "very/deep/nested/directory/structure/with/many/levels/final_file.py",
+        "src/components/ui/forms/input/types/NumberInput/NumberInput.tsx",
+    ]
+
+    # File modification scenarios with realistic patterns
+    MODIFICATION_TYPE_SCENARIOS = [
+        # Added files - common patterns
+        ("A", None, "src/new_feature.py", 50, 0),
+        ("A", None, "tests/test_new_feature.py", 25, 0),
+        ("A", None, "docs/new_feature.md", 15, 0),
+        ("A", None, ".github/workflows/new-ci.yml", 30, 0),
+        # Deleted files - common patterns
+        ("D", "src/deprecated.py", None, 0, 45),
+        ("D", "tests/test_deprecated.py", None, 0, 20),
+        ("D", "old_config.json", None, 0, 10),
+        ("D", "legacy/old_module.js", None, 0, 150),
+        # Modified files - typical changes
+        ("M", "src/main.py", "src/main.py", 15, 8),
+        ("M", "README.md", "README.md", 5, 2),
+        ("M", "package.json", "package.json", 3, 1),
+        ("M", "pyproject.toml", "pyproject.toml", 2, 0),
+        # Renamed files - common patterns
+        ("R", "old_name.py", "new_name.py", 2, 1),
+        ("R", "src/module.js", "src/better_module.js", 0, 0),
+        ("R", "docs/old_doc.md", "docs/updated_doc.md", 5, 3),
+        ("R", "config/dev.json", "config/development.json", 0, 0),
+        # Copied files - duplication patterns
+        ("C", "src/template.py", "src/new_module.py", 10, 0),
+        ("C", "config/base.json", "config/production.json", 5, 0),
+        ("C", "tests/base_test.py", "tests/specific_test.py", 20, 5),
+        # Type changes - file mode/type changes
+        ("T", "scripts/deploy", "scripts/deploy.sh", 1, 0),
+        ("T", "config", "config.json", 0, 0),
+        # Unmerged files - conflict scenarios
+        ("U", "src/conflicted.py", "src/conflicted.py", 10, 5),
+        ("U", "config/settings.json", "config/settings.json", 2, 2),
+    ]
+
+    # Large diff patterns for performance testing
+    LARGE_DIFF_PATTERNS = [
+        # Mass file addition (new feature/module)
+        {
+            "description": "New Python module with tests",
+            "modifications": [
+                ("A", None, f"src/new_module/file_{i}.py", 20, 0) for i in range(10)
+            ]
+            + [
+                ("A", None, f"tests/new_module/test_file_{i}.py", 15, 0)
+                for i in range(10)
+            ],
+        },
+        # Mass file deletion (cleanup/refactor)
+        {
+            "description": "Legacy code cleanup",
+            "modifications": [
+                ("D", f"legacy/old_file_{i}.js", None, 0, 30) for i in range(20)
+            ],
+        },
+        # Large refactor (many file modifications)
+        {
+            "description": "API refactor",
+            "modifications": [
+                ("M", f"src/api/endpoint_{i}.py", f"src/api/endpoint_{i}.py", 10, 8)
+                for i in range(15)
+            ]
+            + [
+                (
+                    "M",
+                    f"tests/api/test_endpoint_{i}.py",
+                    f"tests/api/test_endpoint_{i}.py",
+                    5,
+                    3,
+                )
+                for i in range(15)
+            ],
+        },
+        # Mixed operation large diff
+        {
+            "description": "Major version update",
+            "modifications": [
+                ("A", None, f"src/v2/new_feature_{i}.py", 25, 0) for i in range(5)
+            ]
+            + [("D", f"src/v1/old_feature_{i}.py", None, 0, 40) for i in range(8)]
+            + [
+                ("M", f"src/core/module_{i}.py", f"src/core/module_{i}.py", 15, 12)
+                for i in range(12)
+            ]
+            + [
+                ("R", f"src/util_{i}.py", f"src/utils/util_{i}.py", 2, 1)
+                for i in range(6)
+            ],
+        },
+    ]
+
+    # Complex rename/move scenarios
+    COMPLEX_RENAME_SCENARIOS = [
+        # Simple renames
+        ("old_file.py", "new_file.py"),
+        ("utils.js", "utilities.js"),
+        # Directory moves
+        ("src/old_module.py", "lib/old_module.py"),
+        ("frontend/component.tsx", "src/components/component.tsx"),
+        # Extension changes
+        ("script", "script.sh"),
+        ("README", "README.md"),
+        ("config", "config.json"),
+        # Complex reorganization
+        ("old/path/file.py", "new/structure/file.py"),
+        ("legacy/module/submodule.js", "src/refactored/submodule.js"),
+        ("tests/old/test_file.py", "tests/unit/test_file.py"),
+        # Camel case to snake case
+        ("CamelCaseFile.py", "camel_case_file.py"),
+        ("SomeComponent.tsx", "some_component.tsx"),
+        # Version updates in filenames
+        ("api_v1.py", "api_v2.py"),
+        ("config_old.json", "config_new.json"),
+    ]
+
+    # Patch content examples (simplified to avoid syntax issues)
+    REALISTIC_PATCH_EXAMPLES = [
+        "@@ -0,0 +1,3 @@\n+def new_function():\n+    pass",
+        "@@ -1,3 +1,3 @@\n def function():\n-    old_code\n+    new_code",
+        "@@ -10,5 +10,6 @@\n def method():\n-    old_var = 1\n+    new_var = 2",
+    ]
+
+    # Binary file patterns (no patch content)
+    BINARY_FILE_PATTERNS = [
+        ("A", None, "assets/logo.png", 0, 0, None),
+        ("A", None, "fonts/font.woff2", 0, 0, None),
+        ("D", "old_image.jpg", None, 0, 0, None),
+        ("M", "data/file.db", "data/file.db", 0, 0, None),
+        ("R", "old_binary", "new_binary.exe", 0, 0, None),
+    ]
