@@ -10,7 +10,7 @@ description = "An AI assisted tool for generating release-notes for git reposito
 # Consider semantic versioning: https://semver.org/
 # For dynamic versioning, see: https://hatch.pypa.io/latest/version/#dynamic-versioning
 version = "0.1.0"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "MIT" }
 
@@ -33,7 +33,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -93,7 +92,7 @@ all = [
 # Documentation: https://docs.astral.sh/ruff/
 # 88 is Black's default, 79 is PEP 8, 100-120 is common for modern projects
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [
@@ -139,7 +138,7 @@ select = [
 ]
 
 ignore = [
-    "E501",     # Line too long (handled by formatter)
+    # "E501",     # Line too long (handled by formatter)
     "RUF012",   # Mutable class attributes should be annotated with ClassVar
 ]
 
@@ -263,7 +262,7 @@ sort = "Cover"
 [tool.mypy]
 # Static type checking configuration
 # Documentation: https://mypy.readthedocs.io/
-python_version = "3.9"
+python_version = "3.10"
 strict = true
 
 # Additional strict options for type safety

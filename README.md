@@ -1,6 +1,6 @@
 # Auto Release Note Generation
 
-[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](https://opensource.org/licenses/MIT) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff) [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square)](https://github.com/astral-sh/uv) [![Pydantic](https://img.shields.io/badge/Pydantic-2.0+-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://github.com/pydantic/pydantic) [![mypy](https://img.shields.io/badge/mypy-1.0+-1F5082?style=flat-square&logo=python&logoColor=white)](https://github.com/python/mypy) [![pytest](https://img.shields.io/badge/pytest-7.0+-009639?style=flat-square&logo=pytest&logoColor=white)](https://github.com/pytest-dev/pytest) [![Git](https://img.shields.io/badge/Git-2.0+-F05032?style=flat-square&logo=git&logoColor=white)](https://git-scm.com/)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](https://opensource.org/licenses/MIT) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff) [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square)](https://github.com/astral-sh/uv) [![Pydantic](https://img.shields.io/badge/Pydantic-2.0+-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://github.com/pydantic/pydantic) [![mypy](https://img.shields.io/badge/mypy-1.0+-1F5082?style=flat-square&logo=python&logoColor=white)](https://github.com/python/mypy) [![pytest](https://img.shields.io/badge/pytest-7.0+-009639?style=flat-square&logo=pytest&logoColor=white)](https://github.com/pytest-dev/pytest) [![Git](https://img.shields.io/badge/Git-2.0+-F05032?style=flat-square&logo=git&logoColor=white)](https://git-scm.com/)
 
 An AI-powered tool for automatically generating persona-specific release notes from Git repository history.
 
@@ -28,7 +28,7 @@ See our [Dev Plan](docs/dev_plan.md) for detailed progress tracking.
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) - Fast Python package manager
 - Git (version 2.0 or higher recommended)
 
