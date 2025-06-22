@@ -51,26 +51,31 @@ Documentation = "https://github.com/AIWorldTakeover/auto-release-note-generation
 dev = [
     # Code formatting and linting
     "ruff>=0.6.0,<1.0.0",                      # Fast Python linter and formatter
-    
+
     # Type checking
     "mypy>=1.8.0,<2.0.0",                      # Static type checker
-    
+
     # Testing framework and plugins
     "pytest>=8.0.0,<9.0.0",                    # Testing framework
     "pytest-cov>=4.0.0,<6.0.0",                # Coverage reporting
     "pytest-xdist>=3.3.0,<4.0.0",              # Parallel test execution
     "pytest-mock>=3.10.0,<4.0.0",              # Mocking utilities
     "hypothesis>=6.0.0,<7.0.0",                # Property-based testing
-    
+
     # Development tools
     "pre-commit>=3.0.0,<4.0.0",                # Git hooks for quality checks
+    "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
+    "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
+
+    # Jupyter notebook support (optional - only if using notebooks)
+    "nbqa>=1.7.0,<2.0.0",                      # Quality assurance for notebooks
 ]
 
 docs = [
     # Documentation generator and theme
     "sphinx>=7.0.0,<8.0.0",                    # Documentation generator
     "furo>=2024.1.29,<2025.0.0",               # Modern Sphinx theme
-    
+
     # Sphinx extensions and plugins
     "myst-parser>=2.0.0,<3.0.0",               # Markdown support for Sphinx
     "sphinx-autodoc-typehints>=1.24.0,<2.0.0", # Better type hint docs
@@ -100,38 +105,38 @@ select = [
     "E",        # pycodestyle errors
     "W",        # pycodestyle warnings
     "F",        # Pyflakes (undefined names, unused imports, etc.)
-    
+
     # Code quality and modernization
     "UP",       # pyupgrade (modern Python syntax)
     "FURB",     # refurb (modernize code patterns)
     "RUF",      # Ruff-specific rules
-    
+
     # Import organization and style
     "I",        # isort (import sorting)
     "ICN",      # flake8-import-conventions (standard import aliases)
-    
+
     # Bug prevention and best practices
     "B",        # flake8-bugbear (common Python gotchas)
     "PIE",      # flake8-pie (miscellaneous good practices)
     "SIM",      # flake8-simplify (suggest simplifications)
     "C4",       # flake8-comprehensions (better list/dict comprehensions)
     "PERF",     # Perflint (performance anti-patterns)
-    
+
     # Function and argument handling
     "ARG",      # flake8-unused-arguments
     "RET",      # flake8-return (return statement improvements)
     "RSE",      # flake8-raise (raise statement improvements)
-    
+
     # Testing best practices
     "PT",       # flake8-pytest-style
-    
+
     # Code formatting and style consistency
     "Q",        # flake8-quotes (consistent quote style)
     "PYI",      # flake8-pyi (stub file best practices)
-    
+
     # Security (enable with caution, may have false positives)
     # "S",      # flake8-bandit (security testing)
-    
+
     # Documentation and naming (optional - can be verbose)
     # "D",      # pydocstyle (docstring conventions)
     # "N",      # pep8-naming (naming conventions)
@@ -184,19 +189,19 @@ addopts = [
     # Strict configuration
     "--strict-markers",                       # Only allow defined markers
     "--strict-config",                        # Validate configuration files
-    
+
     # Coverage reporting
     "--cov=auto_release_note_generation",     # Coverage source
     "--cov-report=term-missing",              # Show missing lines in terminal
     "--cov-report=html",                      # Generate HTML coverage report
     "--cov-report=xml",                       # Generate XML for CI/CD systems
     "--cov-fail-under=80",                    # Fail if coverage below 80%
-    
+
     # Test execution options
     "-ra",                                    # Show all test results
     "--tb=short",                             # Shorter traceback format
     "--numprocesses=auto",                    # Parallel execution (pytest-xdist)
-    
+
     # Debugging options (uncomment when needed):
     # "-v",                                   # Verbose output
     # "-s",                                   # Don't capture output
