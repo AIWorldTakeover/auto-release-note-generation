@@ -135,7 +135,7 @@ flowchart LR
   P -.-> D
   P -.-> H
   P -.-> L
-  
+
   %% Internal flows
   B --> C
   C --> D
