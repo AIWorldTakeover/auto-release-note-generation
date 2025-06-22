@@ -1,0 +1,237 @@
+# PRE-COMMIT CONFIGURATION
+# =============================================================================
+# Modern pre-commit hooks for Python development with UV
+# Documentation: https://pre-commit.com/
+#
+# SETUP INSTRUCTIONS:
+# 1. Install dependencies:
+#    uv sync --extra dev
+# 2. Install hooks: uv run pre-commit install --install-hooks
+#    (This installs pre-commit, pre-push and commit-msg hooks)
+# 3. Test setup: uv run pre-commit run --all-files
+#
+# USAGE:
+# - Run manually: uv run pre-commit run --all-files
+# - Update hooks: uv run pre-commit autoupdate
+# - Skip hooks: git commit --no-verify (emergency use only)
+# =============================================================================
+# COMMIT MESSAGE FORMAT (enforced by conventional-pre-commit)
+# - Use conventional commit format:
+#       <type>([Optional]<scope>): <description>
+#       [Optional body]
+#       [Optional footer(s)]
+# =============================================================================
+#
+# ADDING NEW SECRETS TO BASELINE:
+# When pre-commit fails due to new secrets:
+# 1. Review the detected secrets: uv run detect-secrets scan .
+# 2. If legitimate, update baseline: uv run detect-secrets audit .secrets.baseline
+# 3. Commit changes: git add .secrets.baseline && git commit -m "chore: update secrets baseline"
+
+
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+default_stages: [pre-commit]
+fail_fast: false # Continue running all hooks even if one fails
+
+repos:
+  # =============================================================================
+  # BUILT-IN HOOKS (File hygiene and basic checks)
+  # =============================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0 # TODO(Optional): Use the latest stable version
+    hooks:
+      # File format and encoding
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: fix-byte-order-marker
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+
+      # JSON, YAML, and TOML validation
+      - id: check-json
+        files: \.(json|jsonc)$
+      - id: check-yaml
+        files: \.(ya?ml)$
+        args: [--allow-multiple-documents]
+      - id: check-toml
+        files: \.toml$
+      - id: pretty-format-json
+        args: [--autofix, --indent=2]
+
+      # Python-specific checks
+      - id: check-ast # Check Python AST validity
+      - id: check-builtin-literals # Require literal syntax when initializing builtin types
+      - id: check-docstring-first # Ensure docstrings come before code
+      - id: debug-statements # Check for debugger imports and breakpoint() calls
+
+      # Security and merge conflict checks
+      - id: detect-private-key # prevent committing private keys
+      - id: check-merge-conflict # Ensure no merge conflict markers are present
+      - id: check-added-large-files
+        args: [--maxkb=1000] # Reject files larger than 1MB
+      - id: check-case-conflict
+      - id: check-symlinks # Ensure no broken symlinks are present
+
+  # =============================================================================
+  # Enhanced security scanning
+  # =============================================================================
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+
+  # TODO(Optional): Enable this if you want more comprehensive safety and security checks
+  # # Dependency vulnerability scanning
+  # - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+  #   rev: v1.3.2
+  #   hooks:
+  #     - id: python-safety-dependencies-check
+
+  # # Additional Python quality checks
+  # - repo: https://github.com/pycqa/bandit
+  #   rev: 1.7.5
+  #   hooks:
+  #     - id: bandit
+  #       args: ['-c', 'pyproject.toml']
+  #       additional_dependencies: ["bandit[toml]"]
+
+  # =============================================================================
+  # RUFF (Fast Python linter and formatter)
+  # =============================================================================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff-format
+        name: ruff-format
+        types: [python]
+        require_serial: true
+        minimum_pre_commit_version: "2.9.2"
+
+      - id: ruff
+        name: ruff-check
+        types: [python]
+        require_serial: false
+        args: [--fix, --exit-non-zero-on-fix, --respect-gitignore]
+        minimum_pre_commit_version: "2.9.2"
+
+  # =============================================================================
+  # STATIC ANALYSIS AND TESTING
+  # =============================================================================
+  - repo: local
+    hooks:
+      # Static type checking
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        args: [--config-file=pyproject.toml]
+        pass_filenames: true
+        require_serial: false
+
+      # Fast unit tests (pre-commit)
+      - id: pytest-fast
+        name: pytest-fast
+        entry: uv run pytest
+        language: system
+        types: [python]
+        args:
+          [
+            --no-header,
+            --tb=short,
+            --maxfail=3,
+            -q,
+            -x,
+            -m,
+            "not slow and not integration and not e2e",
+            --disable-warnings,
+          ]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # Full test suite (pre-push)
+      - id: pytest-full
+        name: pytest-full
+        entry: uv run pytest
+        language: system
+        types: [python]
+        args:
+          - --cov=src,
+          - --cov-report=term-missing,
+          - --cov-report=xml:coverage.xml,
+          - --cov-fail-under=80,
+          - --tb=short
+        pass_filenames: false
+        stages: [pre-push]
+
+  # =============================================================================
+  # DOCUMENTATION AND NOTEBOOK QUALITY
+  # =============================================================================
+  - repo: https://github.com/econchick/interrogate
+    rev: 1.7.0
+    hooks:
+      - id: interrogate
+        args: [
+            --quiet,
+            --fail-under=60, # Start conservative, increase gradually
+            --ignore-init-method, # Don't require __init__ docstrings
+            --ignore-magic, # Don't require __str__, __repr__, etc.
+            --exclude=tests, # Don't lint test files for docstrings
+            --exclude=migrations, # Don't lint migration files
+          ]
+        types: [python]
+
+  # Notebook cleaning (only if using Jupyter notebooks)
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.7.1
+    hooks:
+      - id: nbqa-ruff
+        args: [--fix] # Auto-fix basic issues in notebooks
+        additional_dependencies: [ruff]
+      - id: nbqa-pyupgrade
+        args: [--py39-plus] # Upgrade syntax to Python 3.9+
+        additional_dependencies: [pyupgrade]
+
+  # =============================================================================
+  # COMMIT MESSAGE VALIDATION
+  # =============================================================================
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.2.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          # 1) Flag options (must come before positional types):
+          - --strict
+          - --verbose
+
+          # 2) Positional list of allowed types:
+          - feat
+          - fix
+          - docs
+          - style
+          - refactor
+          - perf
+          - test
+          - build
+          - ci
+          - chore
+          - revert
+
+          # 3) The commit-msg file placeholder:
+          - "$1"
+
+# =============================================================================
+# CI CONFIGURATION
+# =============================================================================
+ci:
+  # Automatically update hook versions monthly
+  autoupdate_schedule: monthly
+  autoupdate_commit_msg: "ci: update pre-commit hooks"
+
+  # Skip hooks that don't work well in CI or are redundant
+  skip: []
+  submodules: false
