@@ -304,47 +304,150 @@ jobs:
         run: |
           uv sync --python ${{ matrix.python-version }} --locked --all-extras --dev
 
-      - name: 🧪 Run tests with coverage
+      - name: 🧪 Run tests
         run: |
           uv run pytest \
-            --cov=src/auto_release_note_generation \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml \
-            --cov-report=html:htmlcov-${{ matrix.python-version }}-${{ matrix.os }} \
-            --cov-fail-under=80 \
             --tb=short \
             -n auto \
             --dist worksteal \
             --junit-xml=reports/pytest-${{ matrix.python-version }}-${{ matrix.os }}.xml \
             --benchmark-disable
 
-      - name: 📊 Generate coverage report summary
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          echo "## Coverage Report - Python ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          uv run coverage report --format=markdown >> $GITHUB_STEP_SUMMARY
-
       - name: 📊 Upload test results
         if: always()
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
           name: test-results-${{ matrix.python-version }}-${{ matrix.os }}-${{ github.sha }}
-          path: |
-            reports/pytest-*.xml
-            coverage-*.xml
-            htmlcov-*/
+          path: reports/pytest-*.xml
           retention-days: 7
 
+  # Code coverage analysis
+  coverage:
+    name: 📊 Code Coverage
+    runs-on: ubuntu-latest
+    needs: [test]
+    # Only run if tests passed and code changed
+    if: needs.test.result == 'success'
+    outputs:
+      percentage: ${{ steps.coverage.outputs.percentage }}
+      passed: ${{ steps.coverage.outputs.passed }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
+        with:
+          python-version: "3.12"  # Use our primary Python version
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
+          enable-cache: true
+          cache-suffix: ${{ runner.os }}-coverage
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv sync --python 3.12 --locked --all-extras --dev
+
+      - name: 🧪 Run tests with coverage
+        id: coverage
+        run: |
+          # Run pytest with coverage
+          uv run pytest \
+            --cov=src/auto_release_note_generation \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --cov-report=json:coverage.json \
+            --cov-fail-under=80 \
+            --cov-branch \
+            --tb=short \
+            -n auto \
+            --dist worksteal \
+            --benchmark-disable
+
+          # Extract coverage percentage for output
+          COVERAGE_PCT=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered'])")
+          echo "percentage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+      - name: 📊 Generate coverage summary
+        if: always() && steps.coverage.outcome != 'skipped'
+        run: |
+          # Generate summary using Python for cleaner JSON parsing
+          python - << 'EOF'
+          import json
+          import os
+
+          try:
+              with open('coverage.json', 'r') as f:
+                  data = json.load(f)
+
+              totals = data['totals']
+              coverage_pct = totals['percent_covered']
+
+              # Generate summary with emojis based on coverage
+              emoji = "🟢" if coverage_pct >= 85 else "🟡" if coverage_pct >= 70 else "🔴"
+
+              summary = f"""# 📊 Coverage Report
+
+          {emoji} **Total Coverage: {coverage_pct:.1f}%**
+
+          | Metric | Value |
+          |--------|-------|
+          | Lines Covered | {totals['covered_lines']:,} / {totals['num_statements']:,} |
+          | Branches Covered | {totals.get('covered_branches', 0):,} / {totals.get('num_branches', 0):,} |
+          | Missing Lines | {totals['missing_lines']:,} |
+          | Excluded Lines | {totals.get('excluded_lines', 0):,} |
+          """
+
+              # Write to GitHub summary
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write(summary)
+          except Exception as e:
+              print(f"Error generating summary: {e}")
+          EOF
+
+          # Add detailed report in collapsible section
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>📋 Detailed Coverage by File</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          uv run coverage report --skip-covered --sort=cover >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+
       - name: 📈 Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml
-          flags: py${{ matrix.python-version }}
-          name: Python ${{ matrix.python-version }}
-          fail_ci_if_error: false
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: 📤 Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: |
+            coverage.xml
+            coverage.json
+            htmlcov/
+          retention-days: 30
+
+      - name: 💬 Comment coverage on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINIMUM_GREEN: 85
+          MINIMUM_ORANGE: 70
+          VERBOSE: true
 
   # Build and validate package
   build:
@@ -414,7 +517,7 @@ jobs:
   ci-success:
     name: ✅ CI Success
     if: always()
-    needs: [changes, workflow-security, quality-checks, type-check, test, build]
+    needs: [changes, workflow-security, quality-checks, type-check, test, coverage, build]
     runs-on: ubuntu-latest
     steps:
       - name: 🎉 Check if all required jobs passed
@@ -429,6 +532,9 @@ jobs:
           fi
           if [[ "${{ needs.test.result }}" == "failure" ]]; then
             FAILED_JOBS="${FAILED_JOBS}test "
+          fi
+          if [[ "${{ needs.coverage.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}coverage "
           fi
           if [[ "${{ needs.build.result }}" == "failure" ]]; then
             FAILED_JOBS="${FAILED_JOBS}build "
@@ -453,6 +559,7 @@ jobs:
           echo "| Quality Checks | ${{ needs.quality-checks.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Type Check | ${{ needs.type-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage | ${{ needs.coverage.result }} ${{ needs.coverage.outputs.percentage && format('({0}%)', needs.coverage.outputs.percentage) || '' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
