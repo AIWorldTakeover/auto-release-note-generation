@@ -233,6 +233,7 @@ markers = [
 # Coverage measurement configuration
 source = ["src"]                    # Source directory to measure
 branch = true                       # Enable branch coverage
+relative_files = true               # Use relative paths for GitHub Actions compatibility
 
 # Files and patterns to exclude from coverage
 omit = [
