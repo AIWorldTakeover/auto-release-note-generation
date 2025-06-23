@@ -1,0 +1,264 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop, "release/**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened ]
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: 'Run with debug logging'
+        required: false
+        default: false
+
+# Cancel in-progress runs for the same workflow and branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Global environment variables
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Faster pip installs
+  PIP_NO_CACHE_DIR: "false"
+  # UV specific
+  UV_SYSTEM_PYTHON: "1"
+
+jobs:
+  # First job: Quick quality checks
+  quality-checks:
+    name: 🔍 Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # Use latest for linting
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/requirements*.txt
+
+      - name: 📝 Get Python/uv info
+        run: |
+          echo "Python location: $(which python)"
+          echo "Python version: $(python --version)"
+          echo "uv location: $(which uv)"
+          echo "uv version: $(uv --version)"
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv sync --extra dev
+          uv pip list
+
+      - name: 🔍 Run pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files --verbose
+        env:
+          SKIP: pytest-fast,pytest-full,mypy  # These run separately
+
+      - name: 🔒 Check for security issues
+        run: |
+          uv run --with pip-audit pip-audit --format=json --output=security-audit.json || true # Non-fatal for now
+          if [ -f security-audit.json ]; then
+            echo "📊 Security audit completed - see artifacts"
+          fi
+
+      - name: 📊 Run interrogate (docstring coverage)
+        run: |
+          uv run interrogate -v src/ \
+            --fail-under 60 \
+            --exclude "*/tests/*" \
+            --exclude "*/__init__.py" \
+            --ignore-init-method \
+            --ignore-magic \
+            --generate-badge docs/badges/
+
+  # Second job: Type checking
+  type-check:
+    name: 🔍 Type Check
+    runs-on: ubuntu-latest
+    needs: [quality-checks]  # Run after quality checks pass
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: 🔧 Install dependencies
+        run: uv sync --extra dev
+
+      - name: 🧪 Run mypy
+        run: |
+          uv run mypy src/ \
+            --config-file pyproject.toml \
+            --junit-xml reports/mypy.xml
+        continue-on-error: true
+
+      - name: 📊 Upload mypy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-results
+          path: reports/mypy.xml
+
+  # Main test job with matrix
+  test:
+    name: 🧪 Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [quality-checks]  # Run after quality checks pass
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        include:
+          - python-version: "3.12"
+            os: macos-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-suffix: ${{ runner.os }}-py${{ matrix.python-version }}
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv sync --python ${{ matrix.python-version }} --extra all
+
+      - name: 🧪 Run tests (Full with coverage)
+        run: |
+          uv run --python ${{ matrix.python-version }} pytest \
+            --cov=src/auto_release_note_generation \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml \
+            --cov-report=html:htmlcov-${{ matrix.python-version }}-${{ matrix.os }} \
+            --cov-fail-under=80 \
+            --tb=short \
+            -n auto \
+            --junit-xml=reports/pytest-${{ matrix.python-version }}-${{ matrix.os }}.xml
+
+      - name: 📊 Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}-${{ matrix.os }}
+          path: |
+            reports/pytest-*.xml
+            coverage-*.xml
+            htmlcov-*/
+
+      - name: 📈 Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml
+          flags: py${{ matrix.python-version }}
+          name: Python ${{ matrix.python-version }}
+          fail_ci_if_error: false
+
+  # Build and validate package
+  build:
+    name: 📦 Build & Validate
+    runs-on: ubuntu-latest
+    needs: [quality-checks, type-check, test]
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version determination
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: 🏗️ Build package
+        run: |
+          uv build --wheel --sdist
+          echo "Contents of dist/:"
+          ls -la dist/
+
+      - name: 📋 Check package metadata
+        run: |
+          uv run --with twine twine check dist/*
+
+      - name: 🧪 Test package installation
+        run: |
+          # Test wheel installation in fresh venv
+          uv venv test-wheel --python 3.12
+          uv pip install --python test-wheel/bin/python dist/*.whl
+          test-wheel/bin/python -c "import auto_release_note_generation; print(auto_release_note_generation.__version__)"
+
+          # Test sdist installation in fresh venv
+          uv venv test-sdist --python 3.12
+          uv pip install --python test-sdist/bin/python dist/*.tar.gz
+          test-sdist/bin/python -c "import auto_release_note_generation; print(auto_release_note_generation.__version__)"
+
+      - name: 📤 Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-packages
+          path: dist/
+
+  # Summary job
+  ci-success:
+    name: ✅ CI Success
+    if: always()
+    needs: [quality-checks, type-check, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🎉 Check if all jobs passed
+        run: |
+          if [[ "${{ needs.quality-checks.result }}" != "success" || \
+                "${{ needs.type-check.result }}" != "success" || \
+                "${{ needs.test.result }}" != "success" || \
+                "${{ needs.build.result }}" != "success" ]]; then
+            echo "❌ One or more jobs failed"
+            exit 1
+          else
+            echo "✅ All jobs passed successfully!"
+          fi
+
+      - name: 🏷️ Set up release (if tagged)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "📦 This is a tagged release: ${GITHUB_REF#refs/tags/}"
+          echo "Ready for deployment!"
