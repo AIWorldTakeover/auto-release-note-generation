@@ -168,6 +168,15 @@ jobs:
             --generate-badge docs/badges/ \
             --badge-format svg
 
+      - name: 🔍 Dependency Review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9  # v4.7.1
+        with:
+          fail-on-severity: high
+          vulnerability-check: true
+          license-check: true
+          allow-licenses: MIT, Apache-2.0, BSD-3-Clause, BSD-2-Clause, ISC, Python-2.0
+
       - name: 📤 Upload security reports
         if: always()
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
