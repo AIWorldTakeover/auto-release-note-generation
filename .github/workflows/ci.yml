@@ -448,15 +448,6 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      - name: 💬 Comment coverage on PR
-        if: github.event_name == 'pull_request' && always()
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MINIMUM_GREEN: 85
-          MINIMUM_ORANGE: 70
-          VERBOSE: true
-
   # Build and validate package
   build:
     name: 📦 Build & Validate
