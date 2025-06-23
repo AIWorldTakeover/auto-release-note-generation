@@ -28,7 +28,6 @@
 # 2. If legitimate, update baseline: uv run detect-secrets audit .secrets.baseline
 # 3. Commit changes: git add .secrets.baseline && git commit -m "chore: update secrets baseline"
 
-
 default_install_hook_types: [pre-commit, pre-push, commit-msg]
 default_stages: [pre-commit]
 fail_fast: false # Continue running all hooks even if one fails
@@ -47,7 +46,6 @@ repos:
       - id: fix-byte-order-marker
       - id: mixed-line-ending
         args: [--fix=lf]
-
 
       # JSON, YAML, and TOML validation
       - id: check-json
@@ -83,6 +81,13 @@ repos:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
 
+  # Dependency vulnerability scanning
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.7.3
+    hooks:
+      - id: pip-audit
+        args: [--desc]
+
   # TODO(Optional): Enable this if you want more comprehensive safety and security checks
   # # Dependency vulnerability scanning
   # - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
@@ -90,13 +95,13 @@ repos:
   #   hooks:
   #     - id: python-safety-dependencies-check
 
-  # # Additional Python quality checks
-  # - repo: https://github.com/pycqa/bandit
-  #   rev: 1.7.5
-  #   hooks:
-  #     - id: bandit
-  #       args: ['-c', 'pyproject.toml']
-  #       additional_dependencies: ["bandit[toml]"]
+  # security audit
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ["-c", "pyproject.toml"]
+        additional_dependencies: ["bandit[toml]"]
 
   # =============================================================================
   # RUFF (Fast Python linter and formatter)
