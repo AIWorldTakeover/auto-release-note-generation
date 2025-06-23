@@ -135,27 +135,52 @@ jobs:
         env:
           SKIP: pytest-fast,pytest-full,mypy  # These run separately
       - name: 🔒 Security audit
-        continue-on-error: true
         run: |
-          # Run pip-audit
-          if uv run --with pip-audit pip-audit --desc --format json --output security-audit.json; then
+          echo "🔒 Running strict security audits..."
+          SECURITY_FAILED=0
+
+          # Run pip-audit - fail on any vulnerability
+          echo "📦 Checking for dependency vulnerabilities..."
+          if ! uv run --with pip-audit pip-audit --desc --format json --output security-audit.json; then
+            echo "❌ FAILED: pip-audit found vulnerabilities"
+            cat security-audit.json | jq -r '.vulnerabilities[] | "  - \(.name) \(.version): \(.vulns[].description)"' 2>/dev/null || true
+            SECURITY_FAILED=1
+          else
             echo "✅ pip-audit passed - no vulnerabilities found"
-          else
-            echo "⚠️ pip-audit identified vulnerabilities but continuing..."
           fi
 
-          # Run bandit for additional Python security checks
-          if uv run --with bandit bandit -r src/ -f json -o bandit-report.json; then
+          # Run bandit - fail on medium+ severity issues
+          echo "🔍 Checking for code security issues..."
+          if ! uv run --with bandit bandit -r src/ -ll -f json -o bandit-report.json; then
+            echo "❌ FAILED: bandit found security issues (medium+ severity)"
+            cat bandit-report.json | jq -r '.results[] | "  - \(.filename):\(.line_number) [\(.test_id)] \(.issue_text)"' 2>/dev/null || true
+            SECURITY_FAILED=1
+          else
             echo "✅ bandit passed - no security issues found"
-          else
-            echo "⚠️ bandit identified issues but continuing..."
           fi
 
-          # Check for secrets
-          if uv run detect-secrets scan --baseline .secrets.baseline; then
-            echo "✅ detect-secrets passed - no secrets detected"
+          # Check for secrets - strict mode
+          echo "🔑 Checking for exposed secrets..."
+          if ! uv run detect-secrets scan --baseline .secrets.baseline; then
+            echo "❌ FAILED: detect-secrets found potential secrets"
+            echo "  Run 'uv run detect-secrets audit .secrets.baseline' to review"
+            SECURITY_FAILED=1
           else
-            echo "⚠️ detect-secrets identified secrets but continuing..."
+            echo "✅ detect-secrets passed - no secrets detected"
+          fi
+
+          # Generate SARIF reports for GitHub Security tab
+          echo "📊 Generating SARIF reports..."
+          uv run --with bandit bandit -r src/ -f sarif -o bandit.sarif || true
+
+          if [ $SECURITY_FAILED -eq 1 ]; then
+            echo ""
+            echo "❌ Security audit failed! Please fix the issues above."
+            echo "💡 Tips:"
+            echo "  - For vulnerabilities: Update dependencies or add to exclusions if false positive"
+            echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
+            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"
+            exit 1
           fi
       - name: 📊 Interrogate (docstring coverage)
         run: |
@@ -185,8 +210,16 @@ jobs:
           path: |
             security-audit.json
             bandit-report.json
+            bandit.sarif
             .secrets.baseline
           retention-days: 30
+
+      - name: 📊 Upload SARIF to GitHub Security
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
+        with:
+          sarif_file: bandit.sarif
+          category: bandit-security-scan
 
   # Type checking
   type-check:
