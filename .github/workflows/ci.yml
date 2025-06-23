@@ -139,14 +139,18 @@ jobs:
           echo "🔒 Running strict security audits..."
           SECURITY_FAILED=0
 
-          # Run pip-audit - fail on any vulnerability
+          # Run pip-audit - fail on any vulnerability (except documented exclusions)
           echo "📦 Checking for dependency vulnerabilities..."
-          if ! uv run --with pip-audit pip-audit --desc --format json --output security-audit.json; then
+          # CVE-2022-42969 in py package - only affects Subversion operations we don't use
+          IGNORE_VULNS="--ignore-vuln PYSEC-2022-42969"
+
+          if ! uv run --with pip-audit pip-audit --desc --format json --output security-audit.json $IGNORE_VULNS; then
             echo "❌ FAILED: pip-audit found vulnerabilities"
             cat security-audit.json | jq -r '.vulnerabilities[] | "  - \(.name) \(.version): \(.vulns[].description)"' 2>/dev/null || true
             SECURITY_FAILED=1
           else
             echo "✅ pip-audit passed - no vulnerabilities found"
+            echo "  Note: Ignoring PYSEC-2022-42969 (py package) - documented in .pip-audit-exclusions.yaml"
           fi
 
           # Run bandit - fail on medium+ severity issues
