@@ -17,70 +17,147 @@ on:
 
 # Cancel in-progress runs for the same workflow and branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
 env:
   # Global environment variables
   PYTHONUNBUFFERED: "1"
   FORCE_COLOR: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  # Faster pip installs
-  PIP_NO_CACHE_DIR: "false"
   # UV specific
   UV_SYSTEM_PYTHON: "1"
+  UV_CACHE_DIR: ".cache/uv"
+
+# Set default permissions to read-only
+permissions:
+    contents: read
 
 jobs:
-  # First job: Quick quality checks
-  quality-checks:
-    name: 🔍 Quality Checks
+  # Detect changes to optimize CI runs
+  changes:
+    name: 🔍 Detect Changes
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      docs: ${{ steps.filter.outputs.docs }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      dependencies: ${{ steps.filter.outputs.dependencies }}
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🔍 Path filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'requirements*.txt'
+            docs:
+              - 'docs/**'
+              - '*.md'
+              - '*.rst'
+            workflows:
+              - '.github/workflows/**'
+            dependencies:
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'requirements*.txt'
+
+  # Security scan for workflow files
+  workflow-security:
+    name: 🔒 Workflow Security Scan
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true' || github.ref == 'refs/heads/main'
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🔍 Initialize CodeQL
+        uses: github/codeql-action/init@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
+        with:
+          languages: 'python,javascript'
+          queries: security-and-quality
+
+      - name: 🔍 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
+
+  # Quick quality checks
+  quality-checks:
+    name: 🔍 Quality Checks
+    runs-on: ${{ inputs.runner_size || 'ubuntu-latest' }}
+    needs: changes
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.workflows == 'true'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
         with:
           fetch-depth: 0  # Full history for better analysis
-
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
         with:
-          python-version: "3.12"  # Use latest for linting
-
+          python-version: "3.12"
       - name: 📦 Install uv
         uses: astral-sh/setup-uv@v3
         with:
+          version: "0.4.x"
           enable-cache: true
           cache-dependency-glob: |
             **/pyproject.toml
+            **/uv.lock
             **/requirements*.txt
-
+          cache-suffix: ${{ runner.os }}-quality
       - name: 📝 Get Python/uv info
         run: |
           echo "Python location: $(which python)"
           echo "Python version: $(python --version)"
           echo "uv location: $(which uv)"
           echo "uv version: $(uv --version)"
-
       - name: 🔧 Install dependencies
         run: |
-          uv sync --extra dev
+          uv sync --locked --all-extras --dev
           uv pip list
-
       - name: 🔍 Run pre-commit hooks
-        uses: pre-commit/action@v3.0.1
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
         with:
           extra_args: --all-files --verbose
         env:
           SKIP: pytest-fast,pytest-full,mypy  # These run separately
-
-      - name: 🔒 Check for security issues
+      - name: 🔒 Security audit
+        continue-on-error: true
         run: |
-          uv run --with pip-audit pip-audit --format=json --output=security-audit.json || true # Non-fatal for now
-          if [ -f security-audit.json ]; then
-            echo "📊 Security audit completed - see artifacts"
+          # Run pip-audit
+          if uv run --with pip-audit pip-audit --desc --format json --output security-audit.json; then
+            echo "✅ pip-audit passed - no vulnerabilities found"
+          else
+            echo "⚠️ pip-audit identified vulnerabilities but continuing..."
           fi
 
-      - name: 📊 Run interrogate (docstring coverage)
+          # Run bandit for additional Python security checks
+          if uv run --with bandit bandit -r src/ -f json -o bandit-report.json; then
+            echo "✅ bandit passed - no security issues found"
+          else
+            echo "⚠️ bandit identified issues but continuing..."
+          fi
+
+          # Check for secrets
+          if uv run detect-secrets scan --baseline .secrets.baseline; then
+            echo "✅ detect-secrets passed - no secrets detected"
+          else
+            echo "⚠️ detect-secrets identified secrets but continuing..."
+          fi
+      - name: 📊 Interrogate (docstring coverage)
         run: |
           uv run interrogate -v src/ \
             --fail-under 60 \
@@ -88,80 +165,102 @@ jobs:
             --exclude "*/__init__.py" \
             --ignore-init-method \
             --ignore-magic \
-            --generate-badge docs/badges/
+            --generate-badge docs/badges/ \
+            --badge-format svg
 
-  # Second job: Type checking
+      - name: 📤 Upload security reports
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: security-reports-${{ github.sha }}
+          path: |
+            security-audit.json
+            bandit-report.json
+            .secrets.baseline
+          retention-days: 30
+
+  # Type checking
   type-check:
     name: 🔍 Type Check
     runs-on: ubuntu-latest
-    needs: [quality-checks]  # Run after quality checks pass
+    needs: [changes, quality-checks]
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.workflows == 'true'
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
         with:
           python-version: "3.12"
 
       - name: 📦 Install uv
         uses: astral-sh/setup-uv@v3
         with:
+          version: "0.4.x"
           enable-cache: true
+          cache-suffix: ${{ runner.os }}-types
 
       - name: 🔧 Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --all-extras --dev
 
       - name: 🧪 Run mypy
         run: |
-          uv run mypy src/ \
+          uv run mypy src/ tests/ \
             --config-file pyproject.toml \
             --junit-xml reports/mypy.xml
         continue-on-error: true
 
       - name: 📊 Upload mypy results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
-          name: mypy-results
-          path: reports/mypy.xml
+          name: mypy-results-${{ github.sha }}
+          path: reports/
+          retention-days: 7
 
   # Main test job with matrix
   test:
     name: 🧪 Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: [quality-checks]  # Run after quality checks pass
+    needs: [changes, quality-checks]
+    if: |
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      needs.changes.outputs.dependencies == 'true'
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         os: [ubuntu-latest]
         include:
-          - python-version: "3.12"
+          # Additional OS testing
+          - python-version: "3.13"
             os: macos-latest
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
 
       - name: 🐍 Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: 📦 Install uv
         uses: astral-sh/setup-uv@v3
         with:
+          version: "0.4.x"
           enable-cache: true
           cache-suffix: ${{ runner.os }}-py${{ matrix.python-version }}
 
       - name: 🔧 Install dependencies
         run: |
-          uv sync --python ${{ matrix.python-version }} --extra all
+          uv sync --python ${{ matrix.python-version }} --locked --all-extras --dev
 
-      - name: 🧪 Run tests (Full with coverage)
+      - name: 🧪 Run tests with coverage
         run: |
-          uv run --python ${{ matrix.python-version }} pytest \
+          uv run pytest \
             --cov=src/auto_release_note_generation \
             --cov-report=term-missing \
             --cov-report=xml:coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml \
@@ -169,21 +268,31 @@ jobs:
             --cov-fail-under=80 \
             --tb=short \
             -n auto \
-            --junit-xml=reports/pytest-${{ matrix.python-version }}-${{ matrix.os }}.xml
+            --dist worksteal \
+            --junit-xml=reports/pytest-${{ matrix.python-version }}-${{ matrix.os }}.xml \
+            --benchmark-disable
+
+      - name: 📊 Generate coverage report summary
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          echo "## Coverage Report - Python ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          uv run coverage report --format=markdown >> $GITHUB_STEP_SUMMARY
 
       - name: 📊 Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
-          name: test-results-${{ matrix.python-version }}-${{ matrix.os }}
+          name: test-results-${{ matrix.python-version }}-${{ matrix.os }}-${{ github.sha }}
           path: |
             reports/pytest-*.xml
             coverage-*.xml
             htmlcov-*/
+          retention-days: 7
 
       - name: 📈 Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage-${{ matrix.python-version }}-${{ matrix.os }}.xml
@@ -195,70 +304,118 @@ jobs:
   build:
     name: 📦 Build & Validate
     runs-on: ubuntu-latest
-    needs: [quality-checks, type-check, test]
+    needs: [changes, quality-checks, type-check, test]
+    if: always()
+    permissions:
+      contents: write
+      id-token: write  # For attestations
+      attestations: write
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
         with:
-          fetch-depth: 0  # Full history for version determination
+          fetch-depth: 1  # Shallow clone for faster builds
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
         with:
           python-version: "3.12"
 
       - name: 📦 Install uv
         uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
 
       - name: 🏗️ Build package
         run: |
           uv build --wheel --sdist
-          echo "Contents of dist/:"
-          ls -la dist/
+          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/ | awk 'NR>1 {print "| " $9 " | " $5 " |"}' >> $GITHUB_STEP_SUMMARY
 
       - name: 📋 Check package metadata
         run: |
-          uv run --with twine twine check dist/*
+          uv run --with twine twine check dist/* --strict
 
       - name: 🧪 Test package installation
         run: |
-          # Test wheel installation in fresh venv
+          # Test wheel installation
           uv venv test-wheel --python 3.12
           uv pip install --python test-wheel/bin/python dist/*.whl
-          test-wheel/bin/python -c "import auto_release_note_generation; print(auto_release_note_generation.__version__)"
+          test-wheel/bin/python -c "import auto_release_note_generation; print(f'✅ Version: {auto_release_note_generation.__version__}')"
 
-          # Test sdist installation in fresh venv
+          # Test sdist installation
           uv venv test-sdist --python 3.12
           uv pip install --python test-sdist/bin/python dist/*.tar.gz
-          test-sdist/bin/python -c "import auto_release_note_generation; print(auto_release_note_generation.__version__)"
+          test-sdist/bin/python -c "import auto_release_note_generation; print(f'✅ Version: {auto_release_note_generation.__version__}')"
+
+      - name: 🔐 Generate build provenance attestations
+        uses: actions/attest-build-provenance@310b0a4a3b0b78ef57ecda988ee04b132db73ef8  # v1.4.3
+        with:
+          subject-path: 'dist/*'
 
       - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
-          name: distribution-packages
+          name: distribution-packages-${{ github.sha }}
           path: dist/
+          retention-days: 90
+          if-no-files-found: error
 
   # Summary job
   ci-success:
     name: ✅ CI Success
     if: always()
-    needs: [quality-checks, type-check, test, build]
+    needs: [changes, workflow-security, quality-checks, type-check, test, build]
     runs-on: ubuntu-latest
     steps:
-      - name: 🎉 Check if all jobs passed
+      - name: 🎉 Check if all required jobs passed
         run: |
-          if [[ "${{ needs.quality-checks.result }}" != "success" || \
-                "${{ needs.type-check.result }}" != "success" || \
-                "${{ needs.test.result }}" != "success" || \
-                "${{ needs.build.result }}" != "success" ]]; then
-            echo "❌ One or more jobs failed"
-            exit 1
-          else
-            echo "✅ All jobs passed successfully!"
+          # Check job results
+          FAILED_JOBS=""
+          if [[ "${{ needs.quality-checks.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}quality-checks "
+          fi
+          if [[ "${{ needs.type-check.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}type-check "
+          fi
+          if [[ "${{ needs.test.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}test "
+          fi
+          if [[ "${{ needs.build.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}build "
           fi
 
-      - name: 🏷️ Set up release (if tagged)
+          if [[ -n "$FAILED_JOBS" ]]; then
+            echo "❌ Failed jobs: $FAILED_JOBS"
+            exit 1
+          else
+            echo "✅ All required jobs passed successfully!"
+          fi
+
+      - name: 📊 Generate CI summary
+        if: always()
+        run: |
+          echo "# CI Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Changes Detection | ${{ needs.changes.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow Security | ${{ needs.workflow-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Checks | ${{ needs.quality-checks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type Check | ${{ needs.type-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Event:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🏷️ Set up release notification
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           echo "📦 This is a tagged release: ${GITHUB_REF#refs/tags/}"
-          echo "Ready for deployment!"
+          echo "🚀 Ready for deployment!"
