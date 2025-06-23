@@ -24,6 +24,7 @@ dependencies = [
     "pydantic>=2.0.0,<3.0.0",                  # Data modeling and validation
     "pydantic-ai>=0.1.0,<1.0.0",               # Pydantic AI integration for AI-assisted features
     "rich>=13.0.0,<14.0.0",                    # Rich terminal output for better CLI UX
+    "urllib3>=2.5.0,<3.0.0",                   # HTTP library (pinned for security fix CVE-2025-50181, CVE-2025-50182)
 ]
 
 # PyPI metadata for better discoverability
@@ -65,6 +66,8 @@ dev = [
     # Development tools
     "pre-commit>=3.0.0,<4.0.0",                # Git hooks for quality checks
     "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
+    "pip-audit>=2.5.0,<3.0.0",                 # Dependency vulnerability auditing
+    "bandit>=1.7.0,<2.0.0",                    # Security linting for Python code
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
     # Jupyter notebook support (optional - only if using notebooks)
@@ -230,6 +233,7 @@ markers = [
 # Coverage measurement configuration
 source = ["src"]                    # Source directory to measure
 branch = true                       # Enable branch coverage
+relative_files = true               # Use relative paths for GitHub Actions compatibility
 
 # Files and patterns to exclude from coverage
 omit = [
@@ -337,7 +341,12 @@ verbosity = "normal"                # Output detail: quiet, normal, verbose
 # max_examples = 50                 # Faster feedback during development
 # deadline = 200
 
-# TODO(Optional): Add Bandit configuration for security linting (if using)
-# [tool.bandit]
-# exclude_dirs = ["tests", "test_*.py", "*_test.py"]
-# skips = ["B101"]  # Skip assert_used test
+[tool.bandit]
+exclude_dirs = [
+    "tests",
+    ".venv",
+]
+skips = ["B101"]  # Skip assert_used test
+
+confidence = "HIGH"  # Only report high-confidence issues
+severity = "MEDIUM"  # Report medium and high severity issues

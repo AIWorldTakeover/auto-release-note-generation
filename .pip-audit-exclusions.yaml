@@ -1,0 +1,17 @@
+# Security vulnerability exclusions for pip-audit
+# This file documents accepted security risks with justifications
+
+# CVE-2022-42969 in py package (dependency of pytest)
+# Vulnerability: ReDoS attack via crafted Subversion repository data
+# Justification:
+#   1. This is a development-only dependency (via pytest)
+#   2. The vulnerability only affects Subversion repository operations
+#   3. We do not use Subversion in this project
+#   4. Risk is limited to development environment only
+#   5. No fix is available for this package yet
+# Risk Level: Low
+# Review Date: 2025-06-23
+py:
+  - PYSEC-2022-42969
+  - CVE-2022-42969
+  - GHSA-w596-4wvx-j9j6
