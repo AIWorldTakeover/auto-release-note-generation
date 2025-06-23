@@ -99,6 +99,9 @@ jobs:
     runs-on: ${{ inputs.runner_size || 'ubuntu-latest' }}
     needs: changes
     if: needs.changes.outputs.python == 'true' || needs.changes.outputs.workflows == 'true'
+    permissions:
+      contents: read
+      security-events: write  # Required for SARIF upload
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
@@ -155,6 +158,9 @@ jobs:
 
           # Run bandit - fail on medium+ severity issues
           echo "🔍 Checking for code security issues..."
+          # Always generate SARIF report first (even if bandit fails)
+          uv run --with bandit bandit -r src/ -ll -f sarif -o bandit.sarif || true
+
           if ! uv run --with bandit bandit -r src/ -ll -f json -o bandit-report.json; then
             echo "❌ FAILED: bandit found security issues (medium+ severity)"
             cat bandit-report.json | jq -r '.results[] | "  - \(.filename):\(.line_number) [\(.test_id)] \(.issue_text)"' 2>/dev/null || true
@@ -173,9 +179,10 @@ jobs:
             echo "✅ detect-secrets passed - no secrets detected"
           fi
 
-          # Generate SARIF reports for GitHub Security tab
-          echo "📊 Generating SARIF reports..."
-          uv run --with bandit bandit -r src/ -f sarif -o bandit.sarif || true
+          # Ensure SARIF file exists even if empty
+          if [ ! -f "bandit.sarif" ]; then
+            echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"bandit","version":"1.7.5"}},"results":[]}]}' > bandit.sarif
+          fi
 
           if [ $SECURITY_FAILED -eq 1 ]; then
             echo ""
@@ -219,11 +226,12 @@ jobs:
           retention-days: 30
 
       - name: 📊 Upload SARIF to GitHub Security
-        if: always() && github.event_name != 'pull_request'
+        if: always() && github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
         with:
           sarif_file: bandit.sarif
           category: bandit-security-scan
+        continue-on-error: true
 
   # Type checking
   type-check:
