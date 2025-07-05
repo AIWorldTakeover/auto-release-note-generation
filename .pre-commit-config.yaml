@@ -191,10 +191,12 @@ repos:
 
   # Notebook cleaning (only if using Jupyter notebooks)
   - repo: https://github.com/nbQA-dev/nbQA
-    rev: 1.7.1
+    rev: 1.9.1
     hooks:
-      - id: nbqa-ruff
+      - id: nbqa-ruff-check
         args: [--fix] # Auto-fix basic issues in notebooks
+        additional_dependencies: [ruff]
+      - id: nbqa-ruff-format
         additional_dependencies: [ruff]
       - id: nbqa-pyupgrade
         args: [--py39-plus] # Upgrade syntax to Python 3.9+

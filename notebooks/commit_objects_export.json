@@ -1,0 +1,330 @@
+[
+  {
+    "ai_summary": null,
+    "branches": [
+      "main"
+    ],
+    "diff": {
+      "affected_paths": [
+        [
+          ".github/workflows/ci.yml",
+          ".github/workflows/ci.yml"
+        ]
+      ],
+      "deletions_count": 9,
+      "files_changed_count": 1,
+      "insertions_count": 0,
+      "modifications": [
+        {
+          "deletions": 9,
+          "insertions": 0,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": ".github/workflows/ci.yml",
+          "path_before": ".github/workflows/ci.yml"
+        }
+      ]
+    },
+    "message": "chore(ci): remove comment coverage on PR\n\nwas not working + redunant.",
+    "metadata": {
+      "author": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 03:48:08"
+      },
+      "committer": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "Arun Joseph",
+        "timestamp": "2025-06-23 03:51:40"
+      },
+      "gpg_signature": null,
+      "parents": [
+        "2f4db07e95d7f1a18be23af7ef2eb589f3dc1b59"
+      ],
+      "sha": "0ad23dfcefca0dc50496ef3633c065fb1d911161"
+    },
+    "summary": "chore(ci): remove comment coverage on PR",
+    "tags": []
+  },
+  {
+    "ai_summary": null,
+    "branches": [
+      "main"
+    ],
+    "diff": {
+      "affected_paths": [
+        [
+          ".github/workflows/ci.yml",
+          ".github/workflows/ci.yml"
+        ]
+      ],
+      "deletions_count": 4,
+      "files_changed_count": 1,
+      "insertions_count": 12,
+      "modifications": [
+        {
+          "deletions": 4,
+          "insertions": 12,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": ".github/workflows/ci.yml",
+          "path_before": ".github/workflows/ci.yml"
+        }
+      ]
+    },
+    "message": "fix(ci): resolve SARIF upload failures in security scanning\n\n- Generate SARIF report before conditional checks to ensure file exists\n- Add security-events write permission to fix \"Resource not accessible\nby integration\" error\n- Create fallback empty SARIF file when bandit produces no results\n- Exclude dependabot runs from SARIF upload due to restricted\npermissions\n- Add continue-on-error to prevent CI failure when SARIF upload fails\n- Fix \"Path does not exist: bandit.sarif\" error by ensuring file\ngeneration",
+    "metadata": {
+      "author": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 03:26:16"
+      },
+      "committer": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "Arun Joseph",
+        "timestamp": "2025-06-23 03:51:40"
+      },
+      "gpg_signature": null,
+      "parents": [
+        "f9f3cd84399e37eae423f186beb61ead8388772e"
+      ],
+      "sha": "2f4db07e95d7f1a18be23af7ef2eb589f3dc1b59"
+    },
+    "summary": "fix(ci): resolve SARIF upload failures in security scanning",
+    "tags": []
+  },
+  {
+    "ai_summary": null,
+    "branches": [
+      "aj/ai-81-bug-cicd-failure-banditsarif",
+      "develop",
+      "main"
+    ],
+    "diff": {
+      "affected_paths": [
+        [
+          null,
+          ".github/workflows/ci.yml"
+        ],
+        [
+          ".gitignore",
+          ".gitignore"
+        ],
+        [
+          null,
+          ".pip-audit-exclusions.yaml"
+        ],
+        [
+          ".pre-commit-config.yaml",
+          ".pre-commit-config.yaml"
+        ],
+        [
+          "README.md",
+          "README.md"
+        ],
+        [
+          "docs/system_design.md",
+          "docs/system_design.md"
+        ],
+        [
+          "pyproject.toml",
+          "pyproject.toml"
+        ],
+        [
+          "uv.lock",
+          "uv.lock"
+        ]
+      ],
+      "deletions_count": 19,
+      "files_changed_count": 8,
+      "insertions_count": 887,
+      "modifications": [
+        {
+          "deletions": 0,
+          "insertions": 574,
+          "modification_type": "A",
+          "patch": null,
+          "path_after": ".github/workflows/ci.yml",
+          "path_before": null
+        },
+        {
+          "deletions": 0,
+          "insertions": 3,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": ".gitignore",
+          "path_before": ".gitignore"
+        },
+        {
+          "deletions": 0,
+          "insertions": 17,
+          "modification_type": "A",
+          "patch": null,
+          "path_after": ".pip-audit-exclusions.yaml",
+          "path_before": null
+        },
+        {
+          "deletions": 9,
+          "insertions": 14,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": ".pre-commit-config.yaml",
+          "path_before": ".pre-commit-config.yaml"
+        },
+        {
+          "deletions": 1,
+          "insertions": 1,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": "README.md",
+          "path_before": "README.md"
+        },
+        {
+          "deletions": 1,
+          "insertions": 1,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": "docs/system_design.md",
+          "path_before": "docs/system_design.md"
+        },
+        {
+          "deletions": 4,
+          "insertions": 13,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": "pyproject.toml",
+          "path_before": "pyproject.toml"
+        },
+        {
+          "deletions": 4,
+          "insertions": 264,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": "uv.lock",
+          "path_before": "uv.lock"
+        }
+      ]
+    },
+    "message": "Merge pull request #5 from AIWorldTakeover/aj/ai-80-setup-cicd-pipeline\n\nAj/ai 80 setup cicd pipeline",
+    "metadata": {
+      "author": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "Arun Joseph",
+        "timestamp": "2025-06-23 03:07:13"
+      },
+      "committer": {
+        "email": "noreply@github.com",
+        "name": "GitHub",
+        "timestamp": "2025-06-23 03:07:13"
+      },
+      "gpg_signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJoWQsxCRC1aQ7uu5UhlAAAJOoQAJRd/58jmVm7wLv2QjolYKsS\naH5DKTjxl3zcWuKSDD0KD4uUT0ENRWBcDH3qPSALmVCWU87Sj+AfSrPW/5xdfUjC\no9a0XJuk7pEdhftzRT/wZxSUFrGH4pdCmKDESgSPNkMRrythqTT/KnSMmbauhL93\nPKjY+EHeLnyD5VuZg4/6ya/ka76wJqKNThPGqRArShcSmVMbeo2E8Wd2PMcfZ1na\n/3mw70md0B1swTkjSpNzR0szkwoMcMNKsshNFSepLIuJ3IBTPYD5acfa9syvUVJA\nB/I4ObyYfZOt4R77bBDmcCqMwyLANckoz4orXtFRF9JawS/b2YoNjU2mWIQxXnR/\ntFrEE8zXn8MFyM+JAAaK310IZ7P74SAzo90ql+cdHuFMZdmgpOCAvmWFjzFsS+pE\nNFzaLG4jUq9WvhrQtWob0iOmd3Gm8zloz0ZvIV7i25y+n+5IPQUPC4IvKaRkKYTJ\nQUbnSg+ZBKwaD2nGn1spUTrXKs70NhsetaVqePiUinNG0rtWiDfDsWtu9jat8znZ\n319lChQDphl+kLdhM2vtYVp2LFhNW/GEC4tJxia8d2RIMJL9Qeqy4h4qhq8cdCKf\nn+p8ru2/U0UMfKaAYC0E1RWCg9W3Yd35tKC/X6sPUzv06QjMJQbVURBbNMpAB/mD\nCO2kpn/iJu3F6rimESkl\n=3W5c\n-----END PGP SIGNATURE-----",
+      "parents": [
+        "68e76cb68390be8d1cc1ec447dabe48b753d6f3c",
+        "a273373913711d880c1eda7f2ab3a687e38beac5"
+      ],
+      "sha": "f9f3cd84399e37eae423f186beb61ead8388772e"
+    },
+    "summary": "Merge pull request #5 from AIWorldTakeover/aj/ai-80-setup-cicd-pipeline",
+    "tags": []
+  },
+  {
+    "ai_summary": null,
+    "branches": [
+      "aj/ai-81-bug-cicd-failure-banditsarif",
+      "backup-before-rebase",
+      "develop",
+      "main"
+    ],
+    "diff": {
+      "affected_paths": [
+        [
+          "pyproject.toml",
+          "pyproject.toml"
+        ]
+      ],
+      "deletions_count": 0,
+      "files_changed_count": 1,
+      "insertions_count": 1,
+      "modifications": [
+        {
+          "deletions": 0,
+          "insertions": 1,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": "pyproject.toml",
+          "path_before": "pyproject.toml"
+        }
+      ]
+    },
+    "message": "chore(coverage): add relative_files setting for GitHub Actions\n\n- Set relative_files = true in coverage configuration\n- Required by py-cov-action/python-coverage-comment-action\n- Fixes 'Cannot read .coverage files because files are absolute' error",
+    "metadata": {
+      "author": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 02:51:51"
+      },
+      "committer": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 02:52:30"
+      },
+      "gpg_signature": null,
+      "parents": [
+        "f99852f9c8592a3b5ca790630bdbfaae41014a6e"
+      ],
+      "sha": "a273373913711d880c1eda7f2ab3a687e38beac5"
+    },
+    "summary": "chore(coverage): add relative_files setting for GitHub Actions",
+    "tags": []
+  },
+  {
+    "ai_summary": null,
+    "branches": [
+      "aj/ai-81-bug-cicd-failure-banditsarif",
+      "backup-before-rebase",
+      "develop",
+      "main"
+    ],
+    "diff": {
+      "affected_paths": [
+        [
+          ".github/workflows/ci.yml",
+          ".github/workflows/ci.yml"
+        ]
+      ],
+      "deletions_count": 23,
+      "files_changed_count": 1,
+      "insertions_count": 130,
+      "modifications": [
+        {
+          "deletions": 23,
+          "insertions": 130,
+          "modification_type": "M",
+          "patch": null,
+          "path_after": ".github/workflows/ci.yml",
+          "path_before": ".github/workflows/ci.yml"
+        }
+      ]
+    },
+    "message": "refactor(ci): optimize coverage job with cleaner implementation\n\n- Simplify coverage job trigger condition (remove redundant always())\n- Add job outputs for coverage percentage and pass/fail status\n- Rewrite coverage summary using Python for robust JSON parsing\n- Add visual indicators (\ud83d\udfe2/\ud83d\udfe1/\ud83d\udd34) based on coverage thresholds\n- Include branch coverage metrics in summary\n- Sort detailed report by coverage (lowest first)\n- Show coverage percentage in final CI summary\n- Add --benchmark-disable to coverage run\n- Improve error handling in summary generation",
+    "metadata": {
+      "author": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 02:46:35"
+      },
+      "committer": {
+        "email": "arunjoseph.ai@gmail.com",
+        "name": "00arun00",
+        "timestamp": "2025-06-23 02:46:35"
+      },
+      "gpg_signature": null,
+      "parents": [
+        "8eea7eab70a051a5343c22c5d040c275570f8580"
+      ],
+      "sha": "f99852f9c8592a3b5ca790630bdbfaae41014a6e"
+    },
+    "summary": "refactor(ci): optimize coverage job with cleaner implementation",
+    "tags": []
+  }
+]
