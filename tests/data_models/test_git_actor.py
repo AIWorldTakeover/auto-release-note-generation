@@ -9,18 +9,24 @@ from pydantic import ValidationError
 from auto_release_note_generation.data_models.shared import GitActor
 
 from .conftest import SharedTestConfig
+from .strategies import (
+    invalid_actor_data,
+    valid_git_actor,
+    valid_git_actor_email,
+    valid_git_actor_name,
+    valid_git_timestamp,
+)
 from .test_data import GitTestData
 from .test_factories import GitActorFactory
-from .test_strategies import HypothesisStrategies
 
 
 class TestGitActorValidation:
     """Test GitActor field validation and constraints."""
 
     @given(
-        HypothesisStrategies.valid_names,
-        HypothesisStrategies.git_realistic_emails,
-        HypothesisStrategies.valid_timestamps,
+        valid_git_actor_name(),
+        valid_git_actor_email(),
+        valid_git_timestamp(),
     )
     def test_valid_creation(self, name, email, timestamp):
         """Test that valid inputs create GitActor successfully."""
@@ -30,17 +36,17 @@ class TestGitActorValidation:
         assert actor.email == email.lower()
         assert actor.timestamp == timestamp
 
-    @given(HypothesisStrategies.invalid_names)
-    def test_invalid_name_rejection(self, invalid_name):
+    @given(invalid_actor_data())
+    def test_invalid_name_rejection(self, invalid_data):
         """Test that invalid names raise ValidationError."""
         with pytest.raises(ValidationError):
-            GitActorFactory.create(name=invalid_name)
+            GitActor(**invalid_data)
 
-    @given(HypothesisStrategies.invalid_emails)
-    def test_invalid_email_rejection(self, invalid_email):
-        """Test that invalid emails raise ValidationError."""
+    @given(invalid_actor_data())
+    def test_invalid_actor_data_rejection(self, invalid_data):
+        """Test that invalid actor data raises ValidationError."""
         with pytest.raises(ValidationError):
-            GitActorFactory.create(email=invalid_email)
+            GitActor(**invalid_data)
 
     @pytest.mark.parametrize("email", GitTestData.REALISTIC_EMAILS)
     def test_git_realistic_emails_accepted(self, email):
@@ -102,20 +108,15 @@ class TestGitActorBehavior:
         assert "John Doe <john.doe@example.com>" in result
         assert "+0000" in result
 
-    @given(
-        HypothesisStrategies.valid_names,
-        HypothesisStrategies.valid_emails,
-        HypothesisStrategies.valid_timestamps,
-    )
-    def test_repr_format(self, name, email, timestamp):
+    @given(valid_git_actor())
+    def test_repr_format(self, actor):
         """Test __repr__ returns detailed representation."""
-        actor = GitActor(name=name, email=email, timestamp=timestamp)
         repr_str = repr(actor)
 
         assert repr_str.startswith("GitActor(")
-        assert f"name='{name.strip()}'" in repr_str
-        assert f"email='{email.strip().lower()}'" in repr_str
-        assert f"timestamp={timestamp.isoformat()}" in repr_str
+        assert f"name='{actor.name}'" in repr_str
+        assert f"email='{actor.email}'" in repr_str
+        assert f"timestamp={actor.timestamp.isoformat()}" in repr_str
 
     def test_string_methods_consistency(self, git_actors_collection):
         """Test that str and repr work consistently across instances."""
@@ -164,7 +165,7 @@ class TestGitActorEdgeCases:
         actor = GitActorFactory.create(name=name)
         assert actor.name == name
 
-    @given(HypothesisStrategies.valid_timestamps)
+    @given(valid_git_timestamp())
     def test_various_timestamp_formats(self, timestamp):
         """Test GitActor handles various timestamp formats."""
         actor = GitActorFactory.create(timestamp=timestamp)
@@ -215,7 +216,7 @@ class TestGitActorFactory:
         assert actor.name == expected_name
         assert actor.email == expected_email.lower()
 
-    @given(HypothesisStrategies.valid_names)
+    @given(valid_git_actor_name())
     def test_factory_with_hypothesis(self, name):
         """Test factory works with hypothesis-generated data."""
         actor = GitActorFactory.create(name=name)
