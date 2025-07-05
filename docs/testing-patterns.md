@@ -1,575 +1,670 @@
-# Testing Patterns Guide
+# Testing Patterns Guide - Modular Strategy System
 
-This guide explains the core testing principles and patterns for adding new modules and tests to the auto-release-note-generation project. Follow these patterns to ensure consistency, maintainability, and scalability as the codebase grows.
+This guide explains how to add new data models and tests using our modular strategy system. The patterns ensure consistency, maintainability, and comprehensive test coverage.
 
 ## Table of Contents
 
-- [Core Principles](#core-principles)
-- [Testing Architecture](#testing-architecture)
-- [Essential Components](#essential-components)
+- [Overview](#overview)
+- [Modular Strategy Architecture](#modular-strategy-architecture)
+- [Adding a New Data Model](#adding-a-new-data-model)
+- [Strategy Development Guidelines](#strategy-development-guidelines)
 - [Testing Categories](#testing-categories)
 - [Best Practices](#best-practices)
-- [Adding New Tests](#adding-new-tests)
 - [Examples](#examples)
 
-## Core Principles
+## Overview
 
-When adding new tests or modules, follow these fundamental principles:
+Our testing infrastructure uses a modular strategy system that:
+- **Organizes strategies by domain** (actors, commits, files, metadata)
+- **Generates model instances** not just raw data
+- **Provides composable building blocks** for complex test scenarios
+- **Ensures type safety** with proper return types
 
-### 1. **Domain Separation**
-- **One file per data model** - Each domain gets its own test file
-- **Clear boundaries** - GitActor tests stay in `test_git_actor.py`, not mixed elsewhere
-- **Focused responsibility** - Each test file has a single, clear purpose
+### Key Principles
 
-### 2. **Pattern-Based Testing**
-- **Property-based testing** with Hypothesis for comprehensive edge case coverage
-- **Factory patterns** for consistent test data creation
-- **Parametrized testing** for efficient test case variation
-- **Fixture-based setup** for reusable test instances
+1. **Domain-Driven Organization** - Strategies are grouped by their domain
+2. **Model-Aware Generation** - Strategies return actual model instances when appropriate
+3. **Composability** - Simple strategies combine to create complex scenarios
+4. **Reusability** - Common patterns are extracted into base utilities
 
-### 3. **Shared Infrastructure**
-- **Centralized configuration** for shared constants and utilities
-- **Reusable strategies** for data generation
-- **Common test data** organized by domain
-- **Standardized assertions** for consistent error checking
-
-## Testing Architecture
-
-Organize your tests using this modular structure:
+## Modular Strategy Architecture
 
 ```
 tests/data_models/
-├── conftest.py                 # Shared configuration and fixtures
-├── test_data.py               # Test data collections by domain
-├── test_strategies.py         # Hypothesis strategies
-├── test_factories.py          # Factory classes for test instances
-├── test_{model_name}.py       # One file per data model
-└── test_utils.py              # Utility function tests
+├── strategies/
+│   ├── __init__.py         # Public API exports
+│   ├── base.py            # Common utilities and helpers
+│   ├── utils.py           # GitSHA and GPG signature strategies
+│   ├── actors.py          # GitActor strategies
+│   ├── metadata.py        # GitMetadata and ChangeMetadata strategies
+│   ├── files.py           # FileModification and Diff strategies
+│   ├── commits.py         # Commit strategies
+│   └── README.md          # Strategy documentation
+├── test_*.py              # Test files using strategies
+└── conftest.py            # Shared fixtures and configuration
 ```
 
-### When to Create New Files
+## Adding a New Data Model
 
-**Create a new test file when:**
-- Adding a new data model (e.g., `Repository` → `test_repository.py`)
-- Testing a new utility module (e.g., `validation.py` → `test_validation.py`)
-- A domain grows beyond a single file's scope
+Follow this step-by-step process when adding a new data model:
 
-**Use existing files when:**
-- Adding tests for existing models
-- Extending factory methods
-- Adding new test data or strategies
+### Step 1: Create the Data Model
 
-## Essential Components
-
-Understanding these four core components will help you add tests consistently:
-
-### 1. SharedTestConfig - Central Configuration
-
-Define constants that multiple tests need:
+First, create your Pydantic model in the appropriate module:
 
 ```python
-class SharedTestConfig:
-    """Configuration constants for all shared data model tests."""
+# src/auto_release_note_generation/data_models/your_model.py
+from pydantic import BaseModel, Field, field_validator
 
-    # Core defaults - used across all models
-    DEFAULT_TIMESTAMP = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    DEFAULT_NAME = "John Doe"
-    DEFAULT_EMAIL = "john.doe@example.com"
+class YourModel(BaseModel):
+    """Your model description."""
 
-    # Model-specific defaults
-    DEFAULT_CHANGE_TYPE = "direct"
-    DEFAULT_TARGET_BRANCH = "main"
+    name: str = Field(..., min_length=1, max_length=255)
+    value: int = Field(..., ge=0)
+    optional_field: str | None = None
 
-    # Validation collections
-    VALID_CHANGE_TYPES = ["direct", "merge", "squash", "octopus", ...]
-    INVALID_CHANGE_TYPES = ["invalid", "", None, "push", "pull"]
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return v.strip()
 ```
 
-**When to add here:** Constants used by multiple test files or shared validation data.
+### Step 2: Create Domain-Specific Strategies
 
-### 2. HypothesisStrategies - Data Generation
-
-Create reusable strategies for property-based testing:
+Create a new strategy module for your domain:
 
 ```python
-class HypothesisStrategies:
-    """Centralized hypothesis strategies for data model testing."""
+# tests/data_models/strategies/your_domain.py
+"""Hypothesis strategies for YourModel data generation."""
 
-    # Basic data types
-    valid_names = st.text(min_size=1, max_size=255)
-    valid_emails = st.one_of(st.emails().map(str), git_realistic_emails)
+from hypothesis import strategies as st
+from auto_release_note_generation.data_models.your_model import YourModel
+from .base import non_empty_text, valid_length_filter
 
-    # Domain-specific strategies
-    valid_git_shas = st.text(
-        min_size=4, max_size=64,
-        alphabet="0123456789abcdef"
+# Basic field strategies
+def valid_your_model_name():
+    """Generate valid names for YourModel."""
+    return st.text(
+        min_size=1,
+        max_size=255,
+        alphabet=st.characters(blacklist_categories=("Cc", "Cs"))
+    ).filter(valid_length_filter)
+
+def valid_your_model_value():
+    """Generate valid values for YourModel."""
+    return st.integers(min_value=0, max_value=1000000)
+
+# Invalid data strategies for testing validation
+def invalid_your_model_data():
+    """Generate invalid data to test validation."""
+    return st.one_of(
+        st.builds(dict, name=st.just(""), value=valid_your_model_value()),
+        st.builds(dict, name=st.just("   "), value=valid_your_model_value()),
+        st.builds(dict, name=valid_your_model_name(), value=st.integers(max_value=-1)),
     )
 
-    valid_change_types = st.sampled_from([
-        "direct", "merge", "squash", "octopus", "rebase"
-    ])
-```
-
-**When to add here:** Reusable data generators that can be composed for different test scenarios.
-
-### 3. TestData Collections - Static Test Data
-
-Organize real-world test cases by domain:
-
-```python
-class GitTestData:
-    """Test data specific to Git-related models."""
-
-    REALISTIC_EMAILS = [
-        "plainaddress",          # No @ symbol (common in Git)
-        "build-system",          # System identifiers
-        "user@internal",         # Internal domains
-    ]
-
-    CORPORATE_PATTERNS = [
-        ("Build System", "build@ci"),
-        ("Jenkins", "jenkins"),
-        ("GitHub", "noreply@github.com"),
-    ]
-```
-
-**When to add here:** Curated collections of real-world patterns and edge cases.
-
-### 4. Factory Classes - Instance Creation
-
-Build consistent test instances with pattern support:
-
-```python
-class ModelFactory:
-    """Factory for creating Model test instances."""
-
-    @staticmethod
-    def create(**overrides):
-        """Create Model with optional field overrides."""
-        defaults = {
-            "field1": SharedTestConfig.DEFAULT_VALUE,
-            "field2": "sensible_default",
+# Complete model strategies
+def valid_your_model(**overrides):
+    """Generate valid YourModel instances."""
+    def build_model(name, value, optional_field):
+        data = {
+            "name": name,
+            "value": value,
+            "optional_field": optional_field,
         }
-        defaults.update(overrides)
-        return Model(**defaults)
+        data.update(overrides)
+        return YourModel(**data)
 
-    @staticmethod
-    def create_from_pattern(pattern_name: str, **overrides):
-        """Create Model based on real-world patterns."""
-        patterns = {
-            "pattern1": lambda **k: ModelFactory.create(field1="specific_value", **k),
-            "pattern2": lambda **k: ModelFactory.create(field2="other_value", **k),
-        }
-        return patterns[pattern_name](**overrides)
+    return st.builds(
+        build_model,
+        name=valid_your_model_name(),
+        value=valid_your_model_value(),
+        optional_field=st.one_of(st.none(), non_empty_text(max_size=100))
+    )
+
+# Specialized strategies for specific scenarios
+def minimal_your_model():
+    """Generate YourModel with minimal required fields."""
+    return valid_your_model(optional_field=None)
+
+def maximal_your_model():
+    """Generate YourModel with all fields populated."""
+    def build_model(name, value):
+        return YourModel(
+            name=name,
+            value=value,
+            optional_field=f"Optional data for {name}"
+        )
+
+    return st.builds(
+        build_model,
+        name=valid_your_model_name(),
+        value=valid_your_model_value()
+    )
+
+# Pattern-based strategies
+def your_model_by_pattern():
+    """Generate YourModel instances based on common patterns."""
+    patterns = [
+        YourModel(name="Default Pattern", value=100),
+        YourModel(name="Edge Case", value=0),
+        YourModel(name="Large Value", value=999999),
+    ]
+    return st.sampled_from(patterns)
 ```
 
-**When to add here:** When you need consistent instance creation or want to support workflow patterns.
-## Testing Categories
+### Step 3: Update Strategy Exports
 
-Organize your test classes into these four standardized categories for any data model:
-
-### 1. TestModelValidation
-**Purpose:** Test field validation, constraints, and input sanitization
+Add your strategies to the module's public API:
 
 ```python
+# tests/data_models/strategies/__init__.py
+# ...existing imports...
+
+# Your domain strategies
+from .your_domain import (
+    valid_your_model_name,
+    valid_your_model_value,
+    valid_your_model,
+    minimal_your_model,
+    maximal_your_model,
+    your_model_by_pattern,
+    invalid_your_model_data,
+)
+```
+
+### Step 4: Create Test File with Standard Categories
+
+Create a comprehensive test file using the strategies:
+
+```python
+# tests/data_models/test_your_model.py
+"""Tests for YourModel data model."""
+
+import pytest
+from hypothesis import given, strategies as st
+from pydantic import ValidationError
+
+from auto_release_note_generation.data_models.your_model import YourModel
+from .strategies import (
+    valid_your_model,
+    minimal_your_model,
+    maximal_your_model,
+    invalid_your_model_data,
+    valid_your_model_name,
+    valid_your_model_value,
+)
+
 class TestYourModelValidation:
     """Test YourModel field validation and constraints."""
 
-    def test_valid_creation(self):
-        """Test that valid inputs create instances successfully."""
+    @given(valid_your_model())
+    def test_valid_creation(self, model: YourModel):
+        """Test that valid inputs create YourModel successfully."""
+        assert isinstance(model, YourModel)
+        assert len(model.name.strip()) > 0
+        assert model.value >= 0
 
-    def test_invalid_field_rejection(self):
-        """Test that invalid fields raise ValidationError."""
+    @given(invalid_your_model_data())
+    def test_invalid_data_rejection(self, invalid_data: dict):
+        """Test that invalid data raises ValidationError."""
+        with pytest.raises(ValidationError):
+            YourModel(**invalid_data)
 
-    def test_business_logic_validation(self):
-        """Test that field combinations follow business rules."""
-```
+    def test_field_validation_edge_cases(self):
+        """Test specific validation edge cases."""
+        # Empty name
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            YourModel(name="", value=10)
 
-### 2. TestModelBehavior  
-**Purpose:** Test core functionality, methods, and expected behaviors
+        # Negative value
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            YourModel(name="Test", value=-1)
 
-```python
+    @given(st.text())
+    def test_name_normalization(self, raw_name: str):
+        """Test that names are properly normalized."""
+        if not raw_name.strip():
+            with pytest.raises(ValidationError):
+                YourModel(name=raw_name, value=10)
+        else:
+            model = YourModel(name=raw_name, value=10)
+            assert model.name == raw_name.strip()
+
+
 class TestYourModelBehavior:
-    """Test YourModel behavior and constraints."""
+    """Test YourModel behavior and methods."""
 
-    def test_immutability(self):
+    @given(valid_your_model())
+    def test_immutability(self, model: YourModel):
         """Test that model is immutable after creation."""
+        with pytest.raises(ValidationError):
+            model.name = "New Name"
 
-    def test_string_representation_format(self):
-        """Test __str__ returns expected format."""
+    @given(valid_your_model())
+    def test_string_representation(self, model: YourModel):
+        """Test string representation format."""
+        str_repr = str(model)
+        assert model.name in str_repr
+        assert str(model.value) in str_repr
 
-    def test_method_behavior(self):
-        """Test custom methods work correctly."""
-```
+    @given(minimal_your_model(), maximal_your_model())
+    def test_optional_field_behavior(self, minimal: YourModel, maximal: YourModel):
+        """Test behavior with and without optional fields."""
+        assert minimal.optional_field is None
+        assert maximal.optional_field is not None
 
-### 3. TestModelEdgeCases
-**Purpose:** Test boundary conditions, edge cases, and unusual scenarios
 
-```python
+class TestYourModelPropertyBased:
+    """Property-based tests for YourModel invariants."""
+
+    @given(valid_your_model())
+    def test_model_invariants(self, model: YourModel):
+        """Test invariants that should always hold."""
+        # Name is never empty after stripping
+        assert len(model.name.strip()) > 0
+
+        # Value is always non-negative
+        assert model.value >= 0
+
+        # Optional field is either None or non-empty
+        if model.optional_field is not None:
+            assert len(model.optional_field) > 0
+
+    @given(valid_your_model_name(), valid_your_model_value())
+    def test_field_combination_validity(self, name: str, value: int):
+        """Test that valid fields always create valid models."""
+        model = YourModel(name=name, value=value)
+        assert model.name == name.strip()
+        assert model.value == value
+
+
 class TestYourModelEdgeCases:
     """Test YourModel edge cases and boundary conditions."""
 
-    def test_minimum_length_fields(self):
-        """Test minimum valid field lengths."""
+    def test_minimum_valid_values(self):
+        """Test minimum valid values for all fields."""
+        model = YourModel(name="a", value=0)
+        assert model.name == "a"
+        assert model.value == 0
 
-    def test_special_characters(self):
-        """Test special characters and unicode support."""
+    def test_maximum_valid_values(self):
+        """Test maximum valid values for all fields."""
+        long_name = "x" * 255
+        model = YourModel(name=long_name, value=999999999)
+        assert len(model.name) == 255
 
-    def test_real_world_patterns(self):
-        """Test patterns found in production data."""
+    @pytest.mark.parametrize("name,expected", [
+        ("  spaces  ", "spaces"),
+        ("\ttabs\t", "tabs"),
+        ("\nnewlines\n", "newlines"),
+        ("  mixed \t\n ", "mixed"),
+    ])
+    def test_whitespace_handling(self, name: str, expected: str):
+        """Test various whitespace handling scenarios."""
+        model = YourModel(name=name, value=10)
+        assert model.name == expected
 ```
 
-### 4. TestModelFactory
-**Purpose:** Test factory functionality and test data generation
+### Step 5: Create Factory for Complex Scenarios
+
+Add a factory class for creating test instances:
 
 ```python
-class TestYourModelFactory:
-    """Test YourModelFactory functionality."""
+# tests/data_models/test_factories.py
+# Add to existing file
 
-    def test_default_creation(self):
-        """Test factory creates valid default instances."""
-
-    def test_pattern_based_creation(self):
-        """Test pattern-based factory usage."""
-
-    def test_factory_with_hypothesis(self):
-        """Test factory works with hypothesis-generated data."""
-```
-
-## Best Practices
-
-Follow these guidelines when adding new tests:
-
-### 1. Use Property-Based Testing for Validation
-
-Test with generated data to catch edge cases:
-
-```python
-@given(HypothesisStrategies.valid_names, HypothesisStrategies.valid_emails)
-def test_model_creation_invariants(self, name, email):
-    """Property-based test for model creation."""
-    instance = ModelFactory.create(name=name, email=email)
-
-    # Test invariants that should always hold
-    assert len(instance.name.strip()) > 0
-    assert instance.name == name.strip()  # Whitespace normalization
-    assert instance.email == email.lower()  # Email normalization
-```
-
-### 2. Use Parametrized Testing for Multiple Cases
-
-Test multiple similar scenarios efficiently:
-
-```python
-@pytest.mark.parametrize("input_value,expected_result", [
-    ("valid_input", "expected_output"),
-    ("edge_case", "edge_result"),
-    ("special_chars", "special_result"),
-])
-def test_field_processing(self, input_value, expected_result):
-    """Test that different inputs produce expected results."""
-    instance = ModelFactory.create(field=input_value)
-    assert instance.processed_field == expected_result
-```
-
-### 3. Use Descriptive Test Names
-
-Name tests to explain what they verify:
-
-```python
-# ✅ Good - explains the behavior being tested
-def test_email_field_converts_uppercase_to_lowercase_for_consistency(self):
-
-# ❌ Avoid - generic and unclear
-def test_email_validation(self):
-```
-
-### 4. Test Both Positive and Negative Cases
-
-Always test both success and failure scenarios:
-
-```python
-def test_valid_input_accepted(self):
-    """Test that valid input creates instance successfully."""
-    instance = ModelFactory.create(field="valid_value")
-    assert instance.field == "valid_value"
-
-def test_invalid_input_rejected(self):
-    """Test that invalid input raises appropriate error."""
-    with pytest.raises(ValidationError, match="Expected error message"):
-        ModelFactory.create(field="invalid_value")
-```
-
-### 5. Organize Tests by Single Responsibility
-
-Each test class should have one clear purpose:
-
-```python
-# ✅ Good - clear separation
-class TestModelValidation:
-    """Test field validation only."""
-
-class TestModelBehavior:  
-    """Test methods and business logic only."""
-
-# ❌ Avoid - mixed responsibilities
-class TestModel:
-    """Tests everything - hard to navigate."""
-```
-
-## Adding New Tests
-
-Follow this step-by-step process to add tests for new models or functionality:
-
-### Step 1: Determine Test Location
-
-**For new data models:**
-- Create `test_{model_name}.py` (e.g., `test_repository.py`)
-- Use existing domain files for related functionality
-
-**For existing models:**
-- Add to appropriate existing test file
-- Extend factory methods in `test_factories.py`
-
-### Step 2: Add Shared Configuration
-
-Update `conftest.py` with constants your tests will need:
-
-```python
-class SharedTestConfig:
-    # ...existing config...
-
-    # Your new model defaults
-    DEFAULT_NEW_FIELD = "sensible_default"
-    VALID_NEW_OPTIONS = ["option1", "option2", "option3"]
-    INVALID_NEW_OPTIONS = ["invalid", "", None]
-```
-
-### Step 3: Create Hypothesis Strategies
-
-Add data generation strategies to `test_strategies.py`:
-
-```python
-class HypothesisStrategies:
-    # ...existing strategies...
-
-    # Your new field strategies
-    valid_new_fields = st.text(min_size=1, max_size=100)
-    valid_new_options = st.sampled_from(["option1", "option2", "option3"])
-```
-
-### Step 4: Add Test Data Collections
-
-Create domain-specific test data in `test_data.py`:
-
-```python
-class YourDomainTestData:
-    """Test data specific to your domain."""
-
-    COMMON_PATTERNS = [
-        "pattern1",
-        "pattern2",
-        "pattern3",
-    ]
-
-    EDGE_CASES = [
-        "edge_case_1",
-        "edge_case_2",
-    ]
-```
-
-### Step 5: Create Factory Class
-
-Add factory to `test_factories.py`:
-
-```python
 class YourModelFactory:
     """Factory for creating YourModel test instances."""
 
     @staticmethod
     def create(**overrides):
-        """Create YourModel with optional field overrides."""
+        """Create YourModel with sensible defaults."""
         defaults = {
-            "field1": SharedTestConfig.DEFAULT_VALUE,
-            "field2": "another_default",
+            "name": "Test Model",
+            "value": 100,
+            "optional_field": None,
         }
         defaults.update(overrides)
         return YourModel(**defaults)
 
     @staticmethod
-    def create_from_pattern(pattern_name: str, **overrides):
-        """Create YourModel based on real-world patterns."""
+    def create_minimal():
+        """Create minimal valid YourModel."""
+        return YourModelFactory.create(name="Min", value=0)
+
+    @staticmethod
+    def create_maximal():
+        """Create YourModel with all fields populated."""
+        return YourModelFactory.create(
+            name="Maximal Model",
+            value=999999,
+            optional_field="All fields populated"
+        )
+
+    @staticmethod
+    def create_from_pattern(pattern: str, **overrides):
+        """Create YourModel based on common patterns."""
         patterns = {
-            "pattern1": lambda **k: YourModelFactory.create(field1="specific", **k),
-            "pattern2": lambda **k: YourModelFactory.create(field2="other", **k),
+            "default": lambda: YourModelFactory.create(**overrides),
+            "minimal": lambda: YourModelFactory.create_minimal(**overrides),
+            "maximal": lambda: YourModelFactory.create_maximal(**overrides),
+            "edge_case": lambda: YourModelFactory.create(
+                name="x" * 255, value=0, **overrides
+            ),
         }
-        return patterns[pattern_name](**overrides)
+
+        if pattern not in patterns:
+            raise ValueError(f"Unknown pattern: {pattern}")
+
+        return patterns[pattern]()
 ```
 
-### Step 6: Create Test File
+## Strategy Development Guidelines
 
-Create your test file with the four standard test classes:
+### 1. Start with Basic Field Strategies
+
+Begin by creating strategies for individual fields:
 
 ```python
-"""Tests for YourModel data model."""
-
-import pytest
-from pydantic import ValidationError
-
-from your_module.models import YourModel
-from .conftest import SharedTestConfig
-from .test_strategies import HypothesisStrategies
-from .test_data import YourDomainTestData
-from .test_factories import YourModelFactory
-
-
-class TestYourModelValidation:
-    """Test YourModel field validation and constraints."""
-
-    def test_valid_creation(self):
-        """Test that valid inputs create YourModel successfully."""
-        # ...test implementation
-
-
-class TestYourModelBehavior:
-    """Test YourModel behavior and constraints."""
-
-    def test_string_representation(self):
-        """Test __str__ returns expected format."""
-        # ...test implementation
-
-
-class TestYourModelEdgeCases:
-    """Test YourModel edge cases and boundary conditions."""
-
-    def test_boundary_values(self):
-        """Test minimum and maximum valid values."""
-        # ...test implementation
-
-
-class TestYourModelFactory:
-    """Test YourModelFactory functionality."""
-
-    def test_default_creation(self):
-        """Test factory creates valid default instances."""
-        # ...test implementation
+def valid_field_name():
+    """Generate valid field values."""
+    return st.text(min_size=1, max_size=100).filter(valid_length_filter)
 ```
 
-### Step 7: Add Fixtures (if needed)
+### 2. Build Invalid Data Strategies
 
-Add fixtures to `conftest.py` for shared test data:
+Create strategies that generate invalid data for testing validation:
 
 ```python
-@pytest.fixture
-def default_your_model():
-    """Default YourModel instance for testing."""
-    from .test_factories import YourModelFactory
-    return YourModelFactory.create()
+def invalid_field_data():
+    """Generate invalid field values."""
+    return st.one_of(
+        st.just(""),  # Empty
+        st.just("   "),  # Whitespace only
+        st.text(min_size=101),  # Too long
+    )
 ```
 
-### Step 8: Run and Validate Tests
+### 3. Compose Model Strategies
 
-```bash
-# Run only your new tests
-uv run pytest tests/data_models/test_your_model.py -v
+Combine field strategies to create complete models:
 
-# Run all tests to ensure no regressions  
-uv run pytest tests/data_models/ -v
+```python
+def valid_model(**overrides):
+    """Generate valid model instances."""
+    def build_model(field1, field2):
+        data = {"field1": field1, "field2": field2}
+        data.update(overrides)
+        return Model(**data)
 
-# Check coverage
-uv run pytest tests/data_models/ --cov=src --cov-report=html
+    return st.builds(
+        build_model,
+        field1=valid_field1(),
+        field2=valid_field2()
+    )
 ```
 
-### Quick Reference Checklist
+### 4. Create Specialized Strategies
 
-When adding tests, ensure you have:
+Add strategies for specific test scenarios:
 
-- [ ] **Four test classes**: Validation, Behavior, EdgeCases, Factory
-- [ ] **Property-based tests**: Using Hypothesis strategies
-- [ ] **Parametrized tests**: For multiple similar cases
-- [ ] **Error testing**: Both positive and negative cases
-- [ ] **Factory methods**: For consistent instance creation
-- [ ] **Descriptive test names**: Explaining what is being tested
-- [ ] **Shared constants**: In SharedTestConfig for reusable values
+```python
+def model_with_edge_case():
+    """Generate model with edge case values."""
+    return valid_model(field1="edge_case_value")
+
+def model_by_type(model_type: str):
+    """Generate model based on type."""
+    type_strategies = {
+        "minimal": minimal_model(),
+        "maximal": maximal_model(),
+        "typical": typical_model(),
+    }
+    return type_strategies[model_type]
+```
+
+### 5. Document Strategy Intent
+
+Always document what each strategy generates and why:
+
+```python
+def complex_scenario_model():
+    """Generate model representing a complex real-world scenario.
+
+    This represents the case where a user has:
+    - Maximum length name
+    - Minimum valid value
+    - All optional fields populated
+
+    Used for stress testing and edge case validation.
+    """
+    return valid_model(
+        name="x" * 255,
+        value=0,
+        optional_field="Complex scenario"
+    )
+```
+
+## Testing Categories
+
+Organize tests into these standard categories:
+
+### 1. Validation Tests
+- Field validation and constraints
+- Input sanitization
+- Business rule validation
+- Error message verification
+
+### 2. Behavior Tests
+- Model methods and properties
+- Immutability checks
+- String representations
+- Computed properties
+
+### 3. Property-Based Tests
+- Model invariants
+- Field relationships
+- Generation consistency
+- Round-trip serialization
+
+### 4. Edge Case Tests
+- Boundary values
+- Unicode and special characters
+- Performance with large data
+- Real-world patterns
+
+## Best Practices
+
+### 1. Use Type Hints
+
+Always specify return types for strategies:
+
+```python
+def valid_model() -> st.SearchStrategy[YourModel]:
+    """Generate valid YourModel instances."""
+    # Implementation
+```
+
+### 2. Leverage Base Utilities
+
+Use common utilities from `base.py`:
+
+```python
+from .base import non_empty_text, trimmed_text, hex_string
+
+def valid_identifier():
+    """Generate valid identifier using base utilities."""
+    return trimmed_text(min_size=1, max_size=50)
+```
+
+### 3. Create Composable Strategies
+
+Design strategies that can be combined:
+
+```python
+def base_model(**overrides):
+    """Base strategy that can be customized."""
+    # Implementation
+
+def specialized_model():
+    """Specialized model building on base."""
+    return base_model(special_field="special_value")
+```
+
+### 4. Test Strategy Quality
+
+Verify your strategies generate appropriate data:
+
+```python
+def test_strategy_generates_valid_models():
+    """Test that strategy always generates valid models."""
+    # Generate 100 examples
+    examples = [valid_model().example() for _ in range(100)]
+
+    # Verify all are valid
+    for model in examples:
+        assert isinstance(model, YourModel)
+        # Add specific assertions
+```
+
+### 5. Handle Optional Fields
+
+Properly handle optional fields in strategies:
+
+```python
+def model_with_optional():
+    """Generate model with optional field handling."""
+    return st.builds(
+        YourModel,
+        required_field=valid_field(),
+        optional_field=st.one_of(
+            st.none(),  # 50% None
+            valid_optional_field()  # 50% populated
+        )
+    )
+```
 
 ## Examples
 
-### Complete Test Class Structure
+### Complete Strategy Module Example
 
 ```python
-class TestModelValidation:
-    """Test Model field validation and constraints."""
+# tests/data_models/strategies/your_domain.py
+"""Hypothesis strategies for YourDomain models."""
 
-    @given(HypothesisStrategies.valid_fields)
-    def test_valid_creation(self, field_value):
-        """Test that valid inputs create Model successfully."""
-        instance = ModelFactory.create(field=field_value)
-        assert instance.field == field_value
+from datetime import datetime
+from hypothesis import strategies as st
 
-    @pytest.mark.parametrize("invalid_input,expected_error", [
-        ("", "Field cannot be empty"),
-        (None, "Field is required"),
-        ("x" * 300, "Field too long"),
-    ])
-    def test_invalid_field_rejection(self, invalid_input, expected_error):
-        """Test that invalid fields raise ValidationError."""
-        with pytest.raises(ValidationError, match=expected_error):
-            ModelFactory.create(field=invalid_input)
-```
+from auto_release_note_generation.data_models import YourModel, RelatedModel
+from .base import non_empty_text, valid_length_filter
+from .utils import valid_git_sha
 
-### Factory with Pattern Support
+# Field strategies
+def valid_identifier():
+    """Generate valid identifiers."""
+    return st.text(
+        min_size=3,
+        max_size=50,
+        alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_")
+    ).filter(lambda x: x[0].isalpha())  # Must start with letter
 
-```python
-class ModelFactory:
-    """Factory for creating Model test instances."""
+def valid_timestamp():
+    """Generate valid timestamps."""
+    return st.datetimes(
+        min_value=datetime(2020, 1, 1),
+        max_value=datetime(2030, 12, 31)
+    )
 
-    @staticmethod
-    def create(**overrides):
-        """Create Model with intelligent defaults."""
-        defaults = {
-            "field1": SharedTestConfig.DEFAULT_VALUE,
-            "field2": "default_value",
+# Model strategies
+def valid_your_model(**overrides):
+    """Generate valid YourModel instances."""
+    def build_model(identifier, timestamp, related_sha):
+        data = {
+            "identifier": identifier,
+            "timestamp": timestamp,
+            "related_sha": related_sha,
         }
-        defaults.update(overrides)
-        return Model(**defaults)
+        data.update(overrides)
+        return YourModel(**data)
 
-    @staticmethod
-    def create_from_pattern(pattern_name: str, **overrides):
-        """Create Model based on real-world patterns."""
-        patterns = {
-            "common": lambda **k: ModelFactory.create(field1="common_value", **k),
-            "edge_case": lambda **k: ModelFactory.create(field1="edge_value", **k),
-        }
+    return st.builds(
+        build_model,
+        identifier=valid_identifier(),
+        timestamp=valid_timestamp(),
+        related_sha=valid_git_sha()
+    )
 
-        if pattern_name not in patterns:
-            raise ValueError(f"Unknown pattern: {pattern_name}")
+# Scenario strategies
+def your_model_with_related():
+    """Generate YourModel with related model."""
+    def build_with_related(model, related):
+        model.set_related(related)
+        return model
 
-        return patterns[pattern_name](**overrides)
+    return st.builds(
+        build_with_related,
+        model=valid_your_model(),
+        related=valid_related_model()
+    )
+
+# Pattern strategies
+def your_model_patterns():
+    """Generate YourModel based on common patterns."""
+    return st.one_of(
+        valid_your_model(identifier="system-generated"),
+        valid_your_model(identifier="user-created"),
+        valid_your_model(identifier="imported-data"),
+    )
 ```
 
-### Property-Based Testing
+### Using Strategies in Tests
 
 ```python
-@given(HypothesisStrategies.valid_names, HypothesisStrategies.valid_emails)
-def test_model_invariants(self, name, email):
-    """Test invariants that should always hold."""
-    instance = ModelFactory.create(name=name, email=email)
+# tests/data_models/test_your_model.py
+from hypothesis import given, assume
+from .strategies import valid_your_model, your_model_patterns
 
-    # These should always be true regardless of input
-    assert len(instance.name.strip()) > 0
-    assert instance.name == name.strip()
-    assert instance.email == email.lower()
+class TestYourModel:
+    @given(valid_your_model())
+    def test_model_creation(self, model):
+        """Test model creation with generated data."""
+        assert model.identifier
+        assert model.timestamp
+        assert model.related_sha
+
+    @given(your_model_patterns())
+    def test_pattern_handling(self, model):
+        """Test handling of common patterns."""
+        # Pattern-specific assertions
+        if model.identifier.startswith("system-"):
+            assert model.is_system_generated()
+        elif model.identifier.startswith("user-"):
+            assert model.is_user_created()
+
+    @given(valid_your_model(), valid_your_model())
+    def test_model_comparison(self, model1, model2):
+        """Test model comparison with different instances."""
+        assume(model1.identifier != model2.identifier)
+        assert model1 != model2
+        assert model1.identifier != model2.identifier
 ```
-
----
 
 ## Summary
 
-This guide provides the essential patterns for adding new tests to the project:
+The modular strategy system provides:
 
-1. **Follow the four-class structure** for each domain (Validation, Behavior, EdgeCases, Factory)
-2. **Use shared infrastructure** (SharedTestConfig, HypothesisStrategies, TestData, Factories)
-3. **Apply best practices** (property-based testing, descriptive names, error testing)
-4. **Follow the step-by-step process** for adding new models or extending existing ones
+1. **Clear organization** - Strategies grouped by domain
+2. **Type safety** - Strategies return typed model instances
+3. **Reusability** - Common patterns extracted to base utilities
+4. **Composability** - Simple strategies combine for complex scenarios
+5. **Comprehensive testing** - From basic validation to complex edge cases
 
-By following these patterns, you ensure that new tests integrate seamlessly with the existing test suite while maintaining consistency, quality, and maintainability as the codebase grows.
+When adding new data models:
+1. Create the model with proper validation
+2. Build domain-specific strategies
+3. Export strategies in `__init__.py`
+4. Write comprehensive tests using the strategies
+5. Add factory methods for complex scenarios
+
+This approach ensures consistent, maintainable, and thorough testing across all data models.
