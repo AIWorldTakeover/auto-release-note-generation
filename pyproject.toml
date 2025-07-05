@@ -72,8 +72,11 @@ dev = [
     "cyclonedx-bom>=6.0.0,<7.0.0",             # Generate Software Bill of Materials (SBOM)
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
-    # Jupyter notebook support (optional - only if using notebooks)
+    # Jupyter notebook support
     "nbqa>=1.7.0,<2.0.0",                      # Quality assurance for notebooks
+    "ipykernel>=6.0.0,<7.0.0",                 # Jupyter kernel for Python
+    "jupyter>=1.0.0,<2.0.0",                   # Jupyter notebook interface
+    "jupyter-ruff>=0.3.0,<1.0.0",              # Ruff formatter extension for JupyterLab
 ]
 
 docs = [
@@ -166,6 +169,14 @@ ignore = [
 
 # Allow star imports in __init__.py files
 "*/__init__.py" = ["F401", "F403"]
+
+# Notebook-specific ignores (all .ipynb files should be in notebooks/)
+"notebooks/*" = [
+    "E402",     # Module imports not at top of file (common in notebooks)
+    "F401",     # Unused imports (often used for interactive exploration)
+    "B018",     # Useless expression (common in notebooks for displaying values)
+    "PERF",     # Performance warnings (notebooks prioritize clarity over performance)
+]
 
 # Import sorting configuration
 [tool.ruff.lint.isort]
