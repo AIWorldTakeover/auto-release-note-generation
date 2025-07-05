@@ -10,8 +10,20 @@ from auto_release_note_generation.data_models.shared import (
     ValidationLimits,
 )
 
+from .strategies import (
+    added_file,
+    deleted_file,
+    empty_diff,
+    multi_file_diff,
+    renamed_file,
+    single_file_diff,
+    unicode_file_path,
+    valid_diff,
+    valid_file_modification,
+    valid_file_path,
+    valid_line_counts,
+)
 from .test_factories import DiffFactory, FileModificationFactory
-from .test_strategies import HypothesisStrategies
 
 
 class TestFileModificationValidation:
@@ -151,7 +163,7 @@ class TestFileModificationValidation:
                 deletions=0,
             )
 
-    @given(HypothesisStrategies.valid_file_paths)
+    @given(valid_file_path())
     def test_valid_file_paths_property_based(self, file_path):
         """Test that valid file paths are accepted using property-based testing."""
         mod = FileModificationFactory.create_modified_file(
@@ -161,33 +173,24 @@ class TestFileModificationValidation:
         assert mod.path_before == file_path
         assert mod.path_after == file_path
 
-    @given(HypothesisStrategies.valid_modification_types)
-    def test_all_modification_types_property_based(self, mod_type):
+    @given(valid_file_modification())
+    def test_all_modification_types_property_based(self, mod):
         """Test all modification types with property-based generation."""
-        if mod_type == "A":
-            mod = FileModificationFactory.create_added_file(modification_type=mod_type)
-        elif mod_type == "D":
-            mod = FileModificationFactory.create_deleted_file(
-                modification_type=mod_type
-            )
-        elif mod_type == "R":
-            mod = FileModificationFactory.create_renamed_file(
-                modification_type=mod_type
-            )
-        elif mod_type == "C":
-            mod = FileModificationFactory.create_copied_file(modification_type=mod_type)
-        else:
-            # For M, U, T, X, B and other types that work with same paths
-            mod = FileModificationFactory.create_modified_file(
-                modification_type=mod_type
-            )
+        assert mod.modification_type in ["A", "C", "D", "M", "R", "T", "U", "X", "B"]
 
-        assert mod.modification_type == mod_type
+        # Validate type-specific constraints
+        if mod.modification_type == "A":
+            assert mod.path_before is None
+            assert mod.path_after is not None
+        elif mod.modification_type == "D":
+            assert mod.path_before is not None
+            assert mod.path_after is None
+        elif mod.modification_type in ["R", "C"]:
+            assert mod.path_before is not None
+            assert mod.path_after is not None
+            assert mod.path_before != mod.path_after
 
-    @given(
-        HypothesisStrategies.valid_line_counts,
-        HypothesisStrategies.valid_line_counts,
-    )
+    @given(valid_line_counts(), valid_line_counts())
     def test_line_counts_property_based(self, insertions, deletions):
         """Test that valid line counts are accepted."""
         mod = FileModificationFactory.create_modified_file(
@@ -319,6 +322,45 @@ class TestFileModificationBusinessLogic:
                 insertions=0,
                 deletions=0,
             )
+
+
+class TestFileModificationPropertyTests:
+    """Property-based tests for FileModification using specific strategies."""
+
+    @given(added_file())
+    def test_added_file_properties(self, mod):
+        """Test properties of added files."""
+        assert mod.modification_type == "A"
+        assert mod.path_before is None
+        assert mod.path_after is not None
+        assert mod.deletions == 0
+
+    @given(deleted_file())
+    def test_deleted_file_properties(self, mod):
+        """Test properties of deleted files."""
+        assert mod.modification_type == "D"
+        assert mod.path_before is not None
+        assert mod.path_after is None
+        assert mod.insertions == 0
+
+    @given(renamed_file())
+    def test_renamed_file_properties(self, mod):
+        """Test properties of renamed files."""
+        assert mod.modification_type == "R"
+        assert mod.path_before is not None
+        assert mod.path_after is not None
+        assert mod.path_before != mod.path_after
+        assert mod.is_rename_or_copy()
+
+    @given(unicode_file_path())
+    def test_unicode_paths(self, path):
+        """Test that unicode paths are handled correctly."""
+        mod = FileModificationFactory.create_modified_file(
+            path_before=path,
+            path_after=path,
+        )
+        assert mod.path_before == path
+        assert mod.path_after == path
 
 
 class TestFileModificationBehavior:
@@ -618,6 +660,46 @@ class TestDiffValidation:
                 deletions_count=0,
                 affected_paths=[(None, None)],
             )
+
+
+class TestDiffPropertyTests:
+    """Property-based tests for Diff using specific strategies."""
+
+    @given(empty_diff())
+    def test_empty_diff_properties(self, diff):
+        """Test properties of empty diffs."""
+        assert diff.is_empty()
+        assert diff.files_changed_count == 0
+        assert diff.insertions_count == 0
+        assert diff.deletions_count == 0
+        assert len(diff.modifications) == 0
+        assert diff.get_total_changes() == 0
+
+    @given(single_file_diff())
+    def test_single_file_diff_properties(self, diff):
+        """Test properties of single file diffs."""
+        assert not diff.is_empty()
+        assert diff.files_changed_count == 1
+        assert len(diff.modifications) == 1
+        assert diff.insertions_count == diff.modifications[0].insertions
+        assert diff.deletions_count == diff.modifications[0].deletions
+
+    @given(multi_file_diff())
+    def test_multi_file_diff_properties(self, diff):
+        """Test properties of multi-file diffs."""
+        assert not diff.is_empty()
+        assert diff.files_changed_count >= 2
+        assert len(diff.modifications) >= 2
+        assert diff.insertions_count == sum(m.insertions for m in diff.modifications)
+        assert diff.deletions_count == sum(m.deletions for m in diff.modifications)
+
+    @given(valid_diff())
+    def test_diff_consistency(self, diff):
+        """Test consistency between diff fields."""
+        assert diff.files_changed_count == len(diff.modifications)
+        assert diff.insertions_count == sum(m.insertions for m in diff.modifications)
+        assert diff.deletions_count == sum(m.deletions for m in diff.modifications)
+        assert len(diff.affected_paths) == len(diff.modifications)
 
 
 class TestDiffBehavior:

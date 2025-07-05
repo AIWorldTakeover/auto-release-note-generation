@@ -1,55 +1,56 @@
 """Tests for ChangeMetadata data model."""
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 from pydantic import ValidationError
 
 from auto_release_note_generation.data_models.shared import ChangeMetadata
 
 from .conftest import SharedTestConfig
+from .strategies import (
+    direct_change,
+    initial_change,
+    invalid_change_metadata,
+    merge_change,
+    octopus_change,
+    valid_change_metadata,
+)
 from .test_data import ChangeTestData
 from .test_factories import ChangeMetadataFactory
-from .test_strategies import HypothesisStrategies
 
 
 class TestChangeMetadataValidation:
     """Test ChangeMetadata field validation and constraints."""
 
-    @given(
-        HypothesisStrategies.valid_change_types,
-        HypothesisStrategies.valid_branch_names,
-        HypothesisStrategies.valid_merge_bases,
-        HypothesisStrategies.valid_pull_request_ids,
-    )
-    def test_comprehensive_valid_creation(
-        self, change_type, target_branch, merge_base, pr_id
-    ):
+    @given(valid_change_metadata())
+    def test_comprehensive_valid_creation(self, metadata):
         """Test comprehensive valid creation with all field combinations."""
-        # Generate appropriate source branches based on change type
-        source_branches: list[str]
-        if change_type == "direct":
-            source_branches = []
-        elif change_type == "initial":
-            source_branches = []  # Initial commits have no source branches
-        elif change_type == "octopus":
-            source_branches = ["branch-1", "branch-2"]
-        else:  # merge, squash, rebase, cherry-pick, revert, amend
-            source_branches = ["feature-branch"]
+        assert isinstance(metadata, ChangeMetadata)
+        assert metadata.change_type in [
+            "direct",
+            "merge",
+            "squash",
+            "octopus",
+            "rebase",
+            "cherry-pick",
+            "revert",
+            "initial",
+            "amend",
+        ]
+        assert metadata.target_branch == metadata.target_branch.strip()
 
-        metadata = ChangeMetadata(
-            change_type=change_type,
-            source_branches=source_branches,
-            target_branch=target_branch,
-            merge_base=merge_base,
-            pull_request_id=pr_id,
-        )
+        # Validate business logic constraints
+        if metadata.change_type == "octopus":
+            assert len(metadata.source_branches) >= 2
+        elif metadata.change_type == "initial":
+            assert len(metadata.source_branches) == 0
+        elif metadata.change_type in ["merge", "squash"]:
+            assert len(metadata.source_branches) >= 1
 
-        assert metadata.change_type == change_type
-        assert metadata.source_branches == source_branches
-        assert metadata.target_branch == target_branch.strip()
-        assert metadata.merge_base == merge_base
-        assert metadata.pull_request_id == (
-            pr_id.strip() if pr_id and pr_id.strip() else None
+        # PR ID should be None or a non-empty string
+        assert metadata.pull_request_id is None or (
+            isinstance(metadata.pull_request_id, str)
+            and len(metadata.pull_request_id.strip()) > 0
         )
 
     def test_valid_creation(self):
@@ -82,23 +83,29 @@ class TestChangeMetadataValidation:
         assert octopus_metadata.change_type == "octopus"
         assert len(octopus_metadata.source_branches) == 2
 
-    @given(HypothesisStrategies.invalid_change_types)
-    def test_invalid_change_type_rejection(self, invalid_type):
-        """Test that invalid change types raise ValidationError."""
+    @given(invalid_change_metadata())
+    def test_invalid_change_metadata_rejection(self, invalid_data):
+        """Test that invalid change metadata raises ValidationError."""
         with pytest.raises(ValidationError):
-            ChangeMetadataFactory.create(change_type=invalid_type)
+            ChangeMetadata(**invalid_data)
 
-    @given(HypothesisStrategies.invalid_branch_names)
-    @settings(suppress_health_check=[HealthCheck.filter_too_much])
-    def test_invalid_target_branch_rejection(self, invalid_branch):
+    def test_invalid_target_branch_rejection(self):
         """Test that invalid target branches raise ValidationError."""
-        with pytest.raises(ValidationError):
-            ChangeMetadataFactory.create(target_branch=invalid_branch)
+        invalid_branches = [
+            "",
+            "   ",
+            "/branch",
+            "branch/",
+            "branch//name",
+            "branch name",
+        ]
+        for invalid_branch in invalid_branches:
+            with pytest.raises(ValidationError):
+                ChangeMetadataFactory.create(target_branch=invalid_branch)
 
-    @given(HypothesisStrategies.empty_source_branch_lists)
-    def test_empty_source_branches_allowed(self, empty_list):
+    def test_empty_source_branches_allowed(self):
         """Test that empty source branch lists are allowed."""
-        metadata = ChangeMetadataFactory.create(source_branches=empty_list)
+        metadata = ChangeMetadataFactory.create(source_branches=[])
         assert metadata.source_branches == []
 
     @pytest.mark.parametrize(
@@ -232,33 +239,15 @@ class TestChangeMetadataBehavior:
         )
         assert str(metadata) == "direct → main"
 
-    @given(
-        HypothesisStrategies.valid_change_types,
-        HypothesisStrategies.valid_branch_names,
-    )
-    def test_repr_format(self, change_type, target_branch):
+    @given(valid_change_metadata())
+    def test_repr_format(self, metadata):
         """Test __repr__ returns detailed representation."""
-        # Generate appropriate source branches based on change type
-        if change_type == "direct":
-            source_branches = ["single-branch"]
-        elif change_type == "initial":
-            source_branches = []  # Initial commits have no source branches
-        elif change_type == "octopus":
-            source_branches = ["branch-1", "branch-2"]
-        else:  # merge, squash, rebase, cherry-pick, revert, amend
-            source_branches = ["feature-branch"]
-
-        metadata = ChangeMetadata(
-            change_type=change_type,
-            source_branches=source_branches,
-            target_branch=target_branch,
-        )
         repr_str = repr(metadata)
 
         assert repr_str.startswith("ChangeMetadata(")
-        assert f"change_type='{change_type}'" in repr_str
-        assert f"source_branches={source_branches}" in repr_str
-        assert f"target_branch='{target_branch.strip()}'" in repr_str
+        assert f"change_type='{metadata.change_type}'" in repr_str
+        assert f"source_branches={metadata.source_branches}" in repr_str
+        assert f"target_branch='{metadata.target_branch}'" in repr_str
 
     def test_string_methods_consistency(self, change_metadata_collection):
         """Test that str and repr work consistently across instances."""
@@ -270,6 +259,37 @@ class TestChangeMetadataBehavior:
             assert len(str_result) > 0
             assert isinstance(repr_result, str)
             assert len(repr_result) > 0
+
+
+class TestChangeMetadataPropertyTests:
+    """Property-based tests for ChangeMetadata using specific strategies."""
+
+    @given(direct_change())
+    def test_direct_change_properties(self, metadata):
+        """Test properties of direct changes."""
+        assert metadata.change_type == "direct"
+        assert len(metadata.source_branches) <= 1
+
+    @given(merge_change())
+    def test_merge_change_properties(self, metadata):
+        """Test properties of merge changes."""
+        assert metadata.change_type == "merge"
+        assert len(metadata.source_branches) == 1
+
+    @given(octopus_change())
+    def test_octopus_change_properties(self, metadata):
+        """Test properties of octopus merges."""
+        assert metadata.change_type == "octopus"
+        assert len(metadata.source_branches) >= 2
+        assert metadata.is_octopus_change()
+
+    @given(initial_change())
+    def test_initial_change_properties(self, metadata):
+        """Test properties of initial commits."""
+        assert metadata.change_type == "initial"
+        assert len(metadata.source_branches) == 0
+        assert metadata.merge_base is None
+        assert metadata.pull_request_id is None
 
 
 class TestChangeMetadataEdgeCases:
@@ -515,11 +535,21 @@ class TestChangeMetadataFactory:
         assert amend.change_type == "amend"
         assert len(amend.source_branches) <= 1
 
-    @given(HypothesisStrategies.valid_change_types)
-    def test_factory_with_hypothesis(self, change_type):
+    @given(valid_change_metadata())
+    def test_factory_with_hypothesis(self, metadata):
         """Test factory works with hypothesis-generated data."""
-        metadata = ChangeMetadataFactory.create(change_type=change_type)
-        assert metadata.change_type == change_type
+        assert isinstance(metadata, ChangeMetadata)
+        assert metadata.change_type in [
+            "direct",
+            "merge",
+            "squash",
+            "octopus",
+            "rebase",
+            "cherry-pick",
+            "revert",
+            "initial",
+            "amend",
+        ]
 
     def test_factory_creates_valid_instances(self, change_metadata_collection):
         """Test that all factory methods create valid instances."""
