@@ -7,45 +7,33 @@ from pydantic import ValidationError
 
 from auto_release_note_generation.data_models.shared import GitMetadata
 
+from .strategies import (
+    invalid_git_sha,
+    merge_commit_metadata,
+    root_commit_metadata,
+    valid_git_metadata,
+    valid_git_sha,
+)
 from .test_data import GitTestData
 from .test_factories import GitActorFactory, GitMetadataFactory
-from .test_strategies import HypothesisStrategies
 
 
 class TestGitMetadataValidation:
     """Test GitMetadata field validation and constraints."""
 
-    @given(
-        HypothesisStrategies.valid_git_shas,
-        HypothesisStrategies.parent_sha_lists,
-        HypothesisStrategies.valid_gpg_signatures,
-    )
-    def test_valid_creation(self, sha, parents, gpg_signature):
+    @given(valid_git_metadata())
+    def test_valid_creation(self, metadata):
         """Test that valid inputs create GitMetadata successfully."""
-        author = GitActorFactory.create()
-        committer = GitActorFactory.create()
+        assert isinstance(metadata, GitMetadata)
+        assert metadata.sha == metadata.sha.lower()  # SHA is normalized
+        assert metadata.author is not None
+        assert metadata.committer is not None
+        assert isinstance(metadata.parents, list)
+        assert metadata.gpg_signature is None or isinstance(metadata.gpg_signature, str)
 
-        metadata = GitMetadata(
-            sha=sha,
-            author=author,
-            committer=committer,
-            parents=parents,
-            gpg_signature=gpg_signature,
-        )
-
-        assert metadata.sha == sha
-        assert metadata.author == author
-        assert metadata.committer == committer
-        assert metadata.parents == parents
-        assert metadata.gpg_signature == gpg_signature
-
-    @given(HypothesisStrategies.invalid_git_shas)
+    @given(invalid_git_sha())
     def test_invalid_sha_rejection(self, invalid_sha):
         """Test that invalid SHAs raise ValidationError."""
-        # Skip cases that are actually valid hex but uppercase
-        if invalid_sha and all(c in "0123456789ABCDEFabcdef" for c in invalid_sha):
-            return  # Skip valid hex strings
-
         with pytest.raises(ValidationError):
             GitMetadataFactory.create(sha=invalid_sha)
 
@@ -76,16 +64,24 @@ class TestGitMetadataValidation:
         with pytest.raises(ValidationError):
             GitMetadataFactory.create(parents=["invalid-sha-with-dashes"])
 
-    @given(HypothesisStrategies.invalid_gpg_signatures)
-    def test_gpg_signature_validation(self, invalid_signature):
+    def test_gpg_signature_validation(self):
         """Test that invalid GPG signatures are rejected."""
-        if invalid_signature == "" or invalid_signature == "   ":
-            # Empty string and whitespace should become None
-            metadata = GitMetadataFactory.create(gpg_signature=invalid_signature)
+        # Test empty/whitespace strings become None
+        for empty_sig in ["", "   ", "\t\n"]:
+            metadata = GitMetadataFactory.create(gpg_signature=empty_sig)
             assert metadata.gpg_signature is None
-        else:
+
+        # Test invalid formats are rejected
+        invalid_sigs = [
+            "invalid signature",  # No valid prefix
+            "sig gpgsig test",  # Wrong prefix
+            "BEGIN PGP SIGNATURE",  # Missing dashes
+            "PGP: signature",  # Wrong format
+        ]
+
+        for invalid_sig in invalid_sigs:
             with pytest.raises(ValidationError):
-                GitMetadataFactory.create(gpg_signature=invalid_signature)
+                GitMetadataFactory.create(gpg_signature=invalid_sig)
 
 
 class TestGitMetadataBehavior:
@@ -234,6 +230,20 @@ class TestGitMetadataEdgeCases:
             assert not metadata.is_root_commit()
             assert metadata.is_merge_commit()
 
+    @given(merge_commit_metadata())
+    def test_merge_commit_properties(self, metadata):
+        """Test properties of merge commits."""
+        assert metadata.is_merge_commit()
+        assert len(metadata.parents) >= 2
+        assert not metadata.is_root_commit()
+
+    @given(root_commit_metadata())
+    def test_root_commit_properties(self, metadata):
+        """Test properties of root commits."""
+        assert metadata.is_root_commit()
+        assert len(metadata.parents) == 0
+        assert not metadata.is_merge_commit()
+
 
 class TestGitMetadataFactory:
     """Test GitMetadataFactory functionality."""
@@ -285,7 +295,7 @@ class TestGitMetadataFactory:
             metadata = GitMetadataFactory.create_from_pattern(pattern)
             assert isinstance(metadata, GitMetadata)
 
-    @given(HypothesisStrategies.valid_git_shas)
+    @given(valid_git_sha())
     def test_factory_with_hypothesis(self, sha):
         """Test factory works with hypothesis-generated data."""
         metadata = GitMetadataFactory.create(sha=sha)
