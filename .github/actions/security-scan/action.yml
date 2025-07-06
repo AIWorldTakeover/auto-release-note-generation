@@ -1,0 +1,190 @@
+name: 'Security Scan'
+description: 'Run comprehensive security scans (pip-audit, bandit, detect-secrets)'
+inputs:
+  fail-on-vulnerability:
+    description: 'Whether to fail on finding vulnerabilities'
+    required: false
+    default: 'true'
+  pip-audit-enabled:
+    description: 'Enable pip-audit scanning'
+    required: false
+    default: 'true'
+  bandit-enabled:
+    description: 'Enable bandit scanning'
+    required: false
+    default: 'true'
+  detect-secrets-enabled:
+    description: 'Enable detect-secrets scanning'
+    required: false
+    default: 'true'
+  upload-artifacts:
+    description: 'Whether to upload security reports as artifacts'
+    required: false
+    default: 'true'
+  artifact-retention-days:
+    description: 'Number of days to retain artifacts'
+    required: false
+    default: '30'
+
+outputs:
+  vulnerabilities-found:
+    description: 'Whether any vulnerabilities were found'
+    value: ${{ steps.security-check.outputs.vulnerabilities-found }}
+  pip-audit-status:
+    description: 'Status of pip-audit scan'
+    value: ${{ steps.security-check.outputs.pip-audit-status }}
+  bandit-status:
+    description: 'Status of bandit scan'
+    value: ${{ steps.security-check.outputs.bandit-status }}
+  secrets-status:
+    description: 'Status of detect-secrets scan'
+    value: ${{ steps.security-check.outputs.secrets-status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🔒 Run security scans
+      id: security-check
+      shell: bash
+      run: |
+        echo "🔒 Running security audits..."
+        SECURITY_FAILED=0
+
+        # Function to set output
+        set_output() {
+          echo "$1=$2" >> $GITHUB_OUTPUT
+        }
+
+        # PIP-AUDIT
+        if [[ "${{ inputs.pip-audit-enabled }}" == "true" ]]; then
+          echo "📦 Checking for dependency vulnerabilities with pip-audit..."
+
+          # Read vulnerability exclusions from YAML file
+          IGNORE_VULNS=""
+          if [ -f ".pip-audit-exclusions.yaml" ]; then
+            echo "📖 Reading vulnerability exclusions from .pip-audit-exclusions.yaml"
+
+            # Parse YAML file using Python for reliability
+            VULNS=$(python .github/scripts/parse_pip_audit_exclusions.py 2>/dev/null || echo "")
+
+            if [ -n "$VULNS" ]; then
+              for vuln in $VULNS; do
+                IGNORE_VULNS="$IGNORE_VULNS --ignore-vuln $vuln"
+              done
+              echo "  Ignoring documented vulnerabilities: $VULNS"
+            fi
+          fi
+
+          # Generate requirements file from uv
+          TEMP_REQUIREMENTS=$(mktemp requirements.XXXXXX.txt)
+          uv export --no-dev --no-header | grep -v '^-e\s' > "$TEMP_REQUIREMENTS"
+
+          # Run pip-audit
+          if uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc --format json --output security-audit.json $IGNORE_VULNS; then
+            echo "✅ pip-audit passed - no vulnerabilities found"
+            set_output "pip-audit-status" "passed"
+          else
+            echo "❌ pip-audit found vulnerabilities"
+
+            # Show vulnerabilities in text format
+            echo "📊 Vulnerability details:"
+            uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc $IGNORE_VULNS || true
+
+            set_output "pip-audit-status" "failed"
+            SECURITY_FAILED=1
+          fi
+
+          rm -f "$TEMP_REQUIREMENTS"
+        else
+          set_output "pip-audit-status" "skipped"
+        fi
+
+        # BANDIT
+        if [[ "${{ inputs.bandit-enabled }}" == "true" ]]; then
+          echo ""
+          echo "🔍 Checking for code security issues with bandit..."
+
+          if uv run --with bandit bandit -r src/ -ll -f json -o bandit-report.json; then
+            echo "✅ bandit passed - no security issues found"
+            set_output "bandit-status" "passed"
+          else
+            echo "❌ bandit found security issues (medium+ severity)"
+
+            # Show issues in readable format
+            if command -v jq >/dev/null 2>&1; then
+              cat bandit-report.json | jq -r '.results[] | "  [\(.test_id)] \(.filename):\(.line_number) - \(.issue_text)"' 2>/dev/null || true
+            fi
+
+            set_output "bandit-status" "failed"
+            SECURITY_FAILED=1
+          fi
+        else
+          set_output "bandit-status" "skipped"
+        fi
+
+        # DETECT-SECRETS
+        if [[ "${{ inputs.detect-secrets-enabled }}" == "true" ]]; then
+          echo ""
+          echo "🔑 Checking for exposed secrets..."
+
+          if uv run detect-secrets scan --baseline .secrets.baseline; then
+            echo "✅ detect-secrets passed - no secrets detected"
+            set_output "secrets-status" "passed"
+          else
+            echo "❌ detect-secrets found potential secrets"
+            echo "  Run 'uv run detect-secrets audit .secrets.baseline' to review"
+
+            set_output "secrets-status" "failed"
+            SECURITY_FAILED=1
+          fi
+        else
+          set_output "secrets-status" "skipped"
+        fi
+
+        # Set overall status
+        if [ $SECURITY_FAILED -eq 1 ]; then
+          set_output "vulnerabilities-found" "true"
+
+          if [[ "${{ inputs.fail-on-vulnerability }}" == "true" ]]; then
+            echo ""
+            echo "❌ Security audit failed! Please fix the issues above."
+            echo "💡 Tips:"
+            echo "  - For vulnerabilities: Update dependencies or add to .pip-audit-exclusions.yaml if false positive"
+            echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
+            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"  # pragma: allowlist secret
+            exit 1
+          fi
+        else
+          set_output "vulnerabilities-found" "false"
+          echo ""
+          echo "✅ All security scans passed!"
+        fi
+
+    - name: 📊 Generate security summary
+      if: always()
+      shell: bash
+      run: |
+        echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| pip-audit | ${{ steps.security-check.outputs.pip-audit-status || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| bandit | ${{ steps.security-check.outputs.bandit-status || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| detect-secrets | ${{ steps.security-check.outputs.secrets-status || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ steps.security-check.outputs.vulnerabilities-found }}" == "true" ]]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Vulnerabilities were found!** Check the logs for details." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: 📤 Upload security reports
+      if: always() && inputs.upload-artifacts == 'true'
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+      with:
+        name: security-reports-${{ github.sha }}
+        path: |
+          security-audit.json
+          bandit-report.json
+          .secrets.baseline
+        retention-days: ${{ inputs.artifact-retention-days }}
+        if-no-files-found: ignore

@@ -1,0 +1,98 @@
+name: 'Setup Python Environment'
+description: 'Set up Python and UV with intelligent caching'
+inputs:
+  python-version:
+    description: 'Python version to install'
+    required: false
+    default: '3.12'
+  uv-version:
+    description: 'UV version to install'
+    required: false
+    default: '0.4.x'
+  cache-key-suffix:
+    description: 'Additional cache key suffix'
+    required: false
+    default: ''
+  install-dependencies:
+    description: 'Whether to install dependencies'
+    required: false
+    default: 'true'
+  extras:
+    description: 'Extras to install (comma-separated)'
+    required: false
+    default: 'all-extras'
+  dev:
+    description: 'Install development dependencies'
+    required: false
+    default: 'true'
+
+outputs:
+  python-version:
+    description: 'The installed Python version'
+    value: ${{ steps.setup-python.outputs.python-version }}
+  cache-hit:
+    description: 'Whether the UV cache was hit'
+    value: ${{ steps.setup-uv.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🐍 Set up Python ${{ inputs.python-version }}
+      id: setup-python
+      uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: 📦 Install uv
+      id: setup-uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: ${{ inputs.uv-version }}
+        enable-cache: true
+        cache-dependency-glob: |
+          **/pyproject.toml
+          **/uv.lock
+          **/requirements*.txt
+        cache-suffix: ${{ runner.os }}-py${{ inputs.python-version }}${{ inputs.cache-key-suffix && format('-{0}', inputs.cache-key-suffix) || '' }}
+
+    - name: 📝 Show environment info
+      shell: bash
+      run: |
+        echo "Python location: $(which python)"
+        echo "Python version: $(python --version)"
+        echo "uv location: $(which uv)"
+        echo "uv version: $(uv --version)"
+        echo "::group::Python packages"
+        python -m pip list || echo "pip not available"
+        echo "::endgroup::"
+
+    - name: 🔧 Install dependencies
+      if: inputs.install-dependencies == 'true'
+      shell: bash
+      run: |
+        INSTALL_CMD="uv sync --python ${{ inputs.python-version }} --locked"
+
+        # Add extras if specified
+        if [[ "${{ inputs.extras }}" != "" && "${{ inputs.extras }}" != "none" ]]; then
+          if [[ "${{ inputs.extras }}" == "all-extras" ]]; then
+            INSTALL_CMD="${INSTALL_CMD} --all-extras"
+          else
+            # Handle comma-separated extras
+            IFS=',' read -ra EXTRAS_ARRAY <<< "${{ inputs.extras }}"
+            for extra in "${EXTRAS_ARRAY[@]}"; do
+              INSTALL_CMD="${INSTALL_CMD} --extra ${extra// /}"
+            done
+          fi
+        fi
+
+        # Add dev flag if needed
+        if [[ "${{ inputs.dev }}" == "true" ]]; then
+          INSTALL_CMD="${INSTALL_CMD} --dev"
+        fi
+
+        echo "Running: $INSTALL_CMD"
+        $INSTALL_CMD
+
+        echo "::group::Installed packages"
+        uv pip list
+        echo "::endgroup::"
