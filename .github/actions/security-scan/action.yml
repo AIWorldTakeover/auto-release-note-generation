@@ -181,7 +181,7 @@ runs:
       if: always() && inputs.upload-artifacts == 'true'
       uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
       with:
-        name: security-reports-${{ github.sha }}
+        name: security-reports-${{ github.sha }}-${{ github.run_id }}
         path: |
           security-audit.json
           bandit-report.json
