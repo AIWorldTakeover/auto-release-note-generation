@@ -103,6 +103,7 @@ jobs:
           coverage-enabled: "true"
           coverage-fail-under: "80"
           test-flags: "--cov-config=pyproject.toml"
+          artifact-suffix: "full-coverage"
 
       - name: 📈 Upload coverage to Codecov
         uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
@@ -164,7 +165,7 @@ jobs:
       - name: 📤 Upload artifacts
         uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
         with:
-          name: distribution-packages-${{ github.sha }}-${{ github.run_id }}
+          name: distribution-packages-${{ github.sha }}-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
           path: dist/
           retention-days: 90
           if-no-files-found: error

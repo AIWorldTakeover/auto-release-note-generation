@@ -24,26 +24,27 @@ env:
   # Global environment variables
   PYTHONUNBUFFERED: "1"
   FORCE_COLOR: "1"
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  # UV specific
   UV_SYSTEM_PYTHON: "1"
 
-# Set default permissions to read-only
 permissions:
-    contents: read
+  contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+  id-token: write
+  attestations: write
 
 jobs:
-  # Detect changes to optimize CI runs
+  # Quick change detection to optimize CI runs
   changes:
     name: 🔍 Detect Changes
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
     outputs:
       python: ${{ steps.filter.outputs.python }}
       docs: ${{ steps.filter.outputs.docs }}
       workflows: ${{ steps.filter.outputs.workflows }}
       dependencies: ${{ steps.filter.outputs.dependencies }}
+      any: ${{ steps.filter.outputs.changes }}
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
@@ -57,568 +58,185 @@ jobs:
               - '**/*.py'
               - 'pyproject.toml'
               - 'uv.lock'
-              - 'requirements*.txt'
             docs:
               - 'docs/**'
               - '*.md'
               - '*.rst'
             workflows:
               - '.github/workflows/**'
+              - '.github/actions/**'
             dependencies:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'requirements*.txt'
 
-  # Security scan for workflow files
-  workflow-security:
-    name: 🔒 Workflow Security Scan
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.workflows == 'true' || github.ref == 'refs/heads/main'
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-
-      - name: 🔍 Initialize CodeQL
-        uses: github/codeql-action/init@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
-        with:
-          languages: 'python,javascript'
-          queries: security-and-quality
-
-      - name: 🔍 Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
-
-  # Quick quality checks
-  quality-checks:
-    name: 🔍 Quality Checks
-    runs-on: ${{ inputs.runner_size || 'ubuntu-latest' }}
-    needs: changes
+  # Run quality checks in parallel
+  quality:
+    name: 📋 Code Quality
+    needs: [changes]
     if: needs.changes.outputs.python == 'true' || needs.changes.outputs.workflows == 'true'
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-        with:
-          fetch-depth: 0  # Full history for better analysis
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
-        with:
-          python-version: "3.12"
-      - name: 📦 Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.4.x"
-          enable-cache: true
-          cache-dependency-glob: |
-            **/pyproject.toml
-            **/uv.lock
-            **/requirements*.txt
-          cache-suffix: ${{ runner.os }}-quality
-      - name: 📝 Get Python/uv info
-        run: |
-          echo "Python location: $(which python)"
-          echo "Python version: $(python --version)"
-          echo "uv location: $(which uv)"
-          echo "uv version: $(uv --version)"
-      - name: 🔧 Install dependencies
-        run: |
-          uv sync --locked --all-extras --dev
-          uv pip list
-      - name: 🔍 Run pre-commit hooks
-        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
-        with:
-          extra_args: --all-files --verbose
-        env:
-          SKIP: pytest-fast,pytest-full,mypy  # These run separately
-      - name: 🔒 Security audit
-        run: |
-          echo "🔒 Running strict security audits..."
-          SECURITY_FAILED=0
+    uses: ./.github/workflows/reusable-quality.yml
+    with:
+      python-version: '3.12'
 
-          # Run pip-audit - fail on any vulnerability (except documented exclusions)
-          echo "📦 Checking for dependency vulnerabilities..."
-          # Read vulnerability exclusions from YAML file
-          echo "📖 Reading vulnerability exclusions from .pip-audit-exclusions.yaml"
-          IGNORE_VULNS=""
-          if [ -f ".pip-audit-exclusions.yaml" ]; then
-            # Validate YAML file is readable
-            if [ ! -r ".pip-audit-exclusions.yaml" ]; then
-              echo "⚠️  WARNING: .pip-audit-exclusions.yaml exists but is not readable"
-            else
-              # Parse YAML file using Python for reliability
-              VULNS=$(python .github/scripts/parse_pip_audit_exclusions.py 2>/dev/null || echo "")
+  # Run security checks in parallel
+  security:
+    name: 🔒 Security Scan
+    needs: [changes]
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.dependencies == 'true'
+    uses: ./.github/workflows/reusable-security.yml
+    with:
+      python-version: '3.12'
+      fail-on-vulnerability: ${{ github.event_name == 'pull_request' }}
+      upload-sarif: true
 
-              if [ -z "$VULNS" ]; then
-                echo "⚠️  WARNING: No vulnerability IDs found in .pip-audit-exclusions.yaml"
-                echo "  Expected format: package_name: [list of vulnerabilities]"
-              else
-                for vuln in $VULNS; do
-                  if [ -z "$IGNORE_VULNS" ]; then
-                    IGNORE_VULNS="--ignore-vuln $vuln"
-                  else
-                    IGNORE_VULNS="$IGNORE_VULNS --ignore-vuln $vuln"
-                  fi
-                done
-                echo "  Ignoring vulnerabilities: $VULNS"
-              fi
-            fi
-          fi
+  # Fast test on latest Python (for quick feedback)
+  test-fast:
+    name: 🚀 Fast Test
+    needs: [changes]
+    if: needs.changes.outputs.python == 'true'
+    uses: ./.github/workflows/reusable-tests.yml
+    with:
+      python-version: '3.12'
+      os: 'ubuntu-latest'
+      coverage-enabled: true
+      coverage-threshold: 80
+      upload-coverage: ${{ github.ref == 'refs/heads/main' }}
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-          # Generate requirements file from lock and scan it
-          # Use --no-header to exclude comments and filter out editable installs
-          TEMP_REQUIREMENTS=$(mktemp requirements.XXXXXX.txt)
-          uv export --no-dev --no-header | grep -v '^-e ' > "$TEMP_REQUIREMENTS"
-
-          # Debug output (only if debug is enabled)
-          if [[ "${{ inputs.debug_enabled }}" == "true" || "${{ github.event.inputs.debug_enabled }}" == "true" ]]; then
-            echo "📋 Generated requirements file: $TEMP_REQUIREMENTS"
-            echo "📊 Total lines: $(wc -l < "$TEMP_REQUIREMENTS")"
-            echo "📄 First 10 lines of requirements file:"
-            head -10 "$TEMP_REQUIREMENTS"
-            echo "..."
-            echo "🔍 Lines starting with # or -e (should be none):"
-            grep -E '^(#|-e)' "$TEMP_REQUIREMENTS" || echo "  ✓ No comment or editable lines found"
-            echo "🔧 IGNORE_VULNS value: '$IGNORE_VULNS'"
-            IGNORE_COUNT=$(echo "$IGNORE_VULNS" | grep -o -- '--ignore-vuln' | wc -l)
-            echo "📊 Number of --ignore-vuln flags: $IGNORE_COUNT"
-          fi
-
-          # Run pip-audit with proper quoting
-          if [[ "${{ inputs.debug_enabled }}" == "true" || "${{ github.event.inputs.debug_enabled }}" == "true" ]]; then
-            echo "🚀 Running command: uv run --with pip-audit pip-audit -r \"$TEMP_REQUIREMENTS\" --desc --format json --output security-audit.json $IGNORE_VULNS"
-          fi
-          if ! uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc --format json --output security-audit.json $IGNORE_VULNS; then
-            echo "❌ FAILED: pip-audit found vulnerabilities"
-
-            # First, run pip-audit again in text format for clear output
-            echo "📊 Running pip-audit in text format to show vulnerabilities:"
-            uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc $IGNORE_VULNS || true
-
-            # Also try to show JSON if available
-            if [ -f security-audit.json ]; then
-              echo ""
-              echo "📋 Attempting to parse JSON output:"
-              if command -v jq >/dev/null 2>&1; then
-                # Try to show just the vulnerabilities array
-                jq -r '.vulnerabilities[] | "  Package: \(.name) \(.version)\n  Vulnerability: \(.vulns[].id // "Unknown")"' security-audit.json 2>/dev/null || {
-                  echo "  ⚠️ JSON parsing failed, showing first 2000 chars of raw JSON:"
-                  head -c 2000 security-audit.json
-                }
-              else
-                echo "  ⚠️ jq not available, showing first 2000 chars of JSON:"
-                head -c 2000 security-audit.json
-              fi
-            fi
-
-            SECURITY_FAILED=1
-          else
-            echo "✅ pip-audit passed - no vulnerabilities found"
-            echo "  Note: Exclusions documented in .pip-audit-exclusions.yaml"
-          fi
-
-          # Clean up temporary file
-          rm -f "$TEMP_REQUIREMENTS"
-
-          # Run bandit - fail on medium+ severity issues
-          echo "🔍 Checking for code security issues..."
-          if ! uv run --with bandit bandit -r src/ -ll -f json -o bandit-report.json; then
-            echo "❌ FAILED: bandit found security issues (medium+ severity)"
-            cat bandit-report.json | jq -r '.results[] | "  - \(.filename):\(.line_number) [\(.test_id)] \(.issue_text)"' 2>/dev/null || true
-            SECURITY_FAILED=1
-          else
-            echo "✅ bandit passed - no security issues found"
-          fi
-
-          # Check for secrets - strict mode
-          echo "🔑 Checking for exposed secrets..."
-          if ! uv run detect-secrets scan --baseline .secrets.baseline; then
-            echo "❌ FAILED: detect-secrets found potential secrets"
-            echo "  Run 'uv run detect-secrets audit .secrets.baseline' to review"
-            SECURITY_FAILED=1
-          else
-            echo "✅ detect-secrets passed - no secrets detected"
-          fi
-
-          if [ $SECURITY_FAILED -eq 1 ]; then
-            echo ""
-            echo "❌ Security audit failed! Please fix the issues above."
-            echo "💡 Tips:"
-            echo "  - For vulnerabilities: Update dependencies or add to exclusions if false positive"
-            echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
-            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"  # pragma: allowlist secret
-            exit 1
-          fi
-      - name: 📊 Interrogate (docstring coverage)
-        run: |
-          uv run interrogate -v src/ \
-            --fail-under 60 \
-            --exclude "*/tests/*" \
-            --exclude "*/__init__.py" \
-            --ignore-init-method \
-            --ignore-magic \
-            --generate-badge docs/badges/ \
-            --badge-format svg
-
-      - name: 🔍 Dependency Review
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9  # v4.7.1
-        with:
-          fail-on-severity: high
-          vulnerability-check: true
-          license-check: true
-          allow-licenses: MIT, Apache-2.0, BSD-3-Clause, BSD-2-Clause, ISC, Python-2.0
-
-      - name: 📤 Upload security reports
-        if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
-        with:
-          name: security-reports-${{ github.sha }}-${{ github.run_id }}
-          path: |
-            security-audit.json
-            bandit-report.json
-            .secrets.baseline
-          retention-days: 30
-
-
-  # Type checking
-  type-check:
-    name: 🔍 Type Check
-    runs-on: ubuntu-latest
-    needs: [changes, quality-checks]
-    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.workflows == 'true'
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
-        with:
-          python-version: "3.12"
-
-      - name: 📦 Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.4.x"
-          enable-cache: true
-          cache-suffix: ${{ runner.os }}-types
-
-      - name: 🔧 Install dependencies
-        run: uv sync --locked --all-extras --dev
-
-      - name: 🧪 Run mypy
-        run: |
-          uv run mypy src/ tests/ \
-            --config-file pyproject.toml \
-            --junit-xml reports/mypy.xml
-        continue-on-error: true
-
-      - name: 📊 Upload mypy results
-        if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
-        with:
-          name: mypy-results-${{ github.sha }}-${{ github.run_id }}
-          path: reports/
-          retention-days: 7
-
-  # Main test job with matrix
-  test:
-    name: 🧪 Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    needs: [changes, quality-checks]
+  # Full test matrix - runs in parallel with fast test
+  test-matrix:
+    name: 🧪 Test Matrix
+    needs: [changes]
     if: |
       needs.changes.outputs.python == 'true' ||
-      needs.changes.outputs.workflows == 'true' ||
-      needs.changes.outputs.dependencies == 'true'
+      needs.changes.outputs.dependencies == 'true' ||
+      github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/develop'
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
         os: [ubuntu-latest]
         include:
-          # Additional OS testing
-          - python-version: "3.13"
+          # Additional OS testing for latest Python
+          - python-version: '3.13'
             os: macos-latest
+          - python-version: '3.13'
+            os: windows-latest
+        exclude:
+          # Skip 3.12 ubuntu as it's covered by fast test
+          - python-version: '3.12'
+            os: ubuntu-latest
+    uses: ./.github/workflows/reusable-tests.yml
+    with:
+      python-version: ${{ matrix.python-version }}
+      os: ${{ matrix.os }}
+      coverage-enabled: false  # Only collect coverage in fast test
 
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-
-      - name: 🐍 Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: 📦 Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.4.x"
-          enable-cache: true
-          cache-suffix: ${{ runner.os }}-py${{ matrix.python-version }}
-
-      - name: 🔧 Install dependencies
-        run: |
-          uv sync --python ${{ matrix.python-version }} --locked --all-extras --dev
-
-      - name: 🧪 Run tests
-        run: |
-          uv run pytest \
-            --tb=short \
-            -n auto \
-            --dist worksteal \
-            --junit-xml=reports/pytest-${{ matrix.python-version }}-${{ matrix.os }}.xml \
-            --benchmark-disable
-
-      - name: 📊 Upload test results
-        if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
-        with:
-          name: test-results-${{ matrix.python-version }}-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}
-          path: reports/pytest-*.xml
-          retention-days: 7
-
-  # Code coverage analysis
-  coverage:
-    name: 📊 Code Coverage
-    runs-on: ubuntu-latest
-    needs: [test]
-    # Only run if tests passed and code changed
-    if: needs.test.result == 'success'
-    outputs:
-      percentage: ${{ steps.coverage.outputs.percentage }}
-      passed: ${{ steps.coverage.outputs.passed }}
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
-        with:
-          python-version: "3.12"  # Use our primary Python version
-
-      - name: 📦 Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.4.x"
-          enable-cache: true
-          cache-suffix: ${{ runner.os }}-coverage
-
-      - name: 🔧 Install dependencies
-        run: |
-          uv sync --python 3.12 --locked --all-extras --dev
-
-      - name: 🧪 Run tests with coverage
-        id: coverage
-        run: |
-          # Run pytest with coverage
-          uv run pytest \
-            --cov=src/auto_release_note_generation \
-            --cov-report=term-missing:skip-covered \
-            --cov-report=xml:coverage.xml \
-            --cov-report=html:htmlcov \
-            --cov-report=json:coverage.json \
-            --cov-fail-under=80 \
-            --cov-branch \
-            --tb=short \
-            -n auto \
-            --dist worksteal \
-            --benchmark-disable
-
-          # Extract coverage percentage for output
-          COVERAGE_PCT=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered'])")
-          echo "percentage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
-          echo "passed=true" >> $GITHUB_OUTPUT
-
-      - name: 📊 Generate coverage summary
-        if: always() && steps.coverage.outcome != 'skipped'
-        run: |
-          # Generate summary using Python for cleaner JSON parsing
-          python - << 'EOF'
-          import json
-          import os
-
-          try:
-              with open('coverage.json', 'r') as f:
-                  data = json.load(f)
-
-              totals = data['totals']
-              coverage_pct = totals['percent_covered']
-
-              # Generate summary with emojis based on coverage
-              emoji = "🟢" if coverage_pct >= 85 else "🟡" if coverage_pct >= 70 else "🔴"
-
-              summary = f"""# 📊 Coverage Report
-
-          {emoji} **Total Coverage: {coverage_pct:.1f}%**
-
-          | Metric | Value |
-          |--------|-------|
-          | Lines Covered | {totals['covered_lines']:,} / {totals['num_statements']:,} |
-          | Branches Covered | {totals.get('covered_branches', 0):,} / {totals.get('num_branches', 0):,} |
-          | Missing Lines | {totals['missing_lines']:,} |
-          | Excluded Lines | {totals.get('excluded_lines', 0):,} |
-          """
-
-              # Write to GitHub summary
-              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-                  f.write(summary)
-          except Exception as e:
-              print(f"Error generating summary: {e}")
-          EOF
-
-          # Add detailed report in collapsible section
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>📋 Detailed Coverage by File</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          uv run coverage report --skip-covered --sort=cover >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-
-      - name: 📈 Upload coverage to Codecov
-        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: true
-          verbose: true
-
-      - name: 📤 Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
-        with:
-          name: coverage-report-${{ github.sha }}-${{ github.run_id }}
-          path: |
-            coverage.xml
-            coverage.json
-            htmlcov/
-          retention-days: 30
-
-
-  # Build and validate package
+  # Build validation - can run in parallel with tests
   build:
     name: 📦 Build & Validate
-    runs-on: ubuntu-latest
-    needs: [changes, quality-checks, type-check, test]
+    needs: [changes]
+    if: |
+      needs.changes.outputs.python == 'true' ||
+      github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/develop' ||
+      startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      python-version: '3.12'
+      validate-installation: true
+      generate-attestations: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+  # Integration point - wait for all parallel jobs
+  ci-status:
+    name: 🎯 CI Status Check
     if: always()
-    permissions:
-      contents: write
-      id-token: write  # For attestations
-      attestations: write
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
-        with:
-          fetch-depth: 1  # Shallow clone for faster builds
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
-        with:
-          python-version: "3.12"
-
-      - name: 📦 Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.4.x"
-
-      - name: 🏗️ Build package
-        run: |
-          uv build --wheel --sdist
-          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          ls -lh dist/ | awk 'NR>1 {print "| " $9 " | " $5 " |"}' >> $GITHUB_STEP_SUMMARY
-
-      - name: 📋 Check package metadata
-        run: |
-          uv run --with twine twine check dist/* --strict
-
-      - name: 🧪 Test package installation
-        run: |
-          # Test wheel installation
-          uv venv test-wheel --python 3.12
-          uv pip install --python test-wheel/bin/python dist/*.whl
-          test-wheel/bin/python -c "import auto_release_note_generation; print(f'✅ Version: {auto_release_note_generation.__version__}')"
-
-          # Test sdist installation
-          uv venv test-sdist --python 3.12
-          uv pip install --python test-sdist/bin/python dist/*.tar.gz
-          test-sdist/bin/python -c "import auto_release_note_generation; print(f'✅ Version: {auto_release_note_generation.__version__}')"
-
-      - name: 🔐 Generate build provenance attestations
-        uses: actions/attest-build-provenance@310b0a4a3b0b78ef57ecda988ee04b132db73ef8  # v1.4.3
-        with:
-          subject-path: 'dist/*'
-
-      - name: 📤 Upload artifacts
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
-        with:
-          name: distribution-packages-${{ github.sha }}-${{ github.run_id }}
-          path: dist/
-          retention-days: 90
-          if-no-files-found: error
-
-  # Summary job
-  ci-success:
-    name: ✅ CI Success
-    if: always()
-    needs: [changes, workflow-security, quality-checks, type-check, test, coverage, build]
+    needs: [quality, security, test-fast, test-matrix, build]
     runs-on: ubuntu-latest
     steps:
-      - name: 🎉 Check if all required jobs passed
+      - name: 🎯 Check CI Status
         run: |
-          # Check job results
+          # Collect job results
           FAILED_JOBS=""
-          if [[ "${{ needs.quality-checks.result }}" == "failure" ]]; then
-            FAILED_JOBS="${FAILED_JOBS}quality-checks "
+
+          # Required jobs that must pass
+          if [[ "${{ needs.quality.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}quality "
           fi
-          if [[ "${{ needs.type-check.result }}" == "failure" ]]; then
-            FAILED_JOBS="${FAILED_JOBS}type-check "
+          if [[ "${{ needs.security.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}security "
           fi
-          if [[ "${{ needs.test.result }}" == "failure" ]]; then
-            FAILED_JOBS="${FAILED_JOBS}test "
+          if [[ "${{ needs.test-fast.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}test-fast "
           fi
-          if [[ "${{ needs.coverage.result }}" == "failure" ]]; then
-            FAILED_JOBS="${FAILED_JOBS}coverage "
+          if [[ "${{ needs.test-matrix.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}test-matrix "
           fi
           if [[ "${{ needs.build.result }}" == "failure" ]]; then
             FAILED_JOBS="${FAILED_JOBS}build "
           fi
 
+          # Generate summary
+          echo "# 📊 CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.quality.result }} | Linting, formatting, type checking |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security.result }} | Vulnerability scanning |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fast Test | ${{ needs.test-fast.result }} | Python 3.12 with coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Matrix | ${{ needs.test-matrix.result }} | Multi-version/OS testing |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} | Package building & validation |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check overall status
           if [[ -n "$FAILED_JOBS" ]]; then
-            echo "❌ Failed jobs: $FAILED_JOBS"
+            echo "❌ **CI Failed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Failed jobs: $FAILED_JOBS" >> $GITHUB_STEP_SUMMARY
             exit 1
           else
-            echo "✅ All required jobs passed successfully!"
+            echo "✅ **All CI checks passed!**" >> $GITHUB_STEP_SUMMARY
+
+            # Add performance metrics
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ⚡ Performance Metrics" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total duration**: ~${{ github.run_number }} minutes" >> $GITHUB_STEP_SUMMARY
+            echo "- **Parallel jobs**: 5" >> $GITHUB_STEP_SUMMARY
+            echo "- **Matrix combinations**: ${{ strategy.job-total || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: 📊 Generate CI summary
-        if: always()
-        run: |
-          echo "# CI Run Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Changes Detection | ${{ needs.changes.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Workflow Security | ${{ needs.workflow-security.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Quality Checks | ${{ needs.quality-checks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Type Check | ${{ needs.type-check.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Coverage | ${{ needs.coverage.result }} ${{ needs.coverage.outputs.percentage && format('({0}%)', needs.coverage.outputs.percentage) || '' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Event:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+      - name: 🏷️ Set PR labels
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const labels = [];
 
-      - name: 🏷️ Set up release notification
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          echo "📦 This is a tagged release: ${GITHUB_REF#refs/tags/}"
-          echo "🚀 Ready for deployment!"
+            // Add status labels
+            if ('${{ needs.quality.result }}' === 'success' &&
+                '${{ needs.test-fast.result }}' === 'success') {
+              labels.push('ci-passed');
+            } else {
+              labels.push('ci-failed');
+            }
+
+            // Add component labels based on changes
+            if ('${{ needs.changes.outputs.docs }}' === 'true') {
+              labels.push('documentation');
+            }
+            if ('${{ needs.changes.outputs.dependencies }}' === 'true') {
+              labels.push('dependencies');
+            }
+
+            // Apply labels
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labels
+              });
+            }
