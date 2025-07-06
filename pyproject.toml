@@ -78,7 +78,7 @@ dev = [
 
 docs = [
     # Documentation generator and theme
-    "sphinx>=7.0.0,<8.0.0",                    # Documentation generator
+    "sphinx>=7.0.0,<9.0.0",                    # Documentation generator
     "furo>=2024.1.29,<2025.0.0",               # Modern Sphinx theme
 
     # Sphinx extensions and plugins
