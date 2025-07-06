@@ -134,58 +134,13 @@ jobs:
           extra_args: --all-files --verbose
         env:
           SKIP: pytest-fast,pytest-full,mypy  # These run separately
-      - name: 🔒 Security audit
-        run: |
-          echo "🔒 Running strict security audits..."
-          SECURITY_FAILED=0
-
-          # Run pip-audit - fail on any vulnerability (except documented exclusions)
-          echo "📦 Checking for dependency vulnerabilities..."
-          # CVE-2022-42969 in py package - only affects Subversion operations we don't use
-          IGNORE_VULNS="--ignore-vuln PYSEC-2022-42969"
-
-          if ! uv run --with pip-audit pip-audit --desc --format json --output security-audit.json $IGNORE_VULNS; then
-            echo "❌ FAILED: pip-audit found vulnerabilities"
-            cat security-audit.json | jq -r '.vulnerabilities[] | "  - \(.name) \(.version): \(.vulns[].description)"' 2>/dev/null || true
-            SECURITY_FAILED=1
-          else
-            echo "✅ pip-audit passed - no vulnerabilities found"
-            echo "  Note: Ignoring PYSEC-2022-42969 (py package) - documented in .pip-audit-exclusions.yaml"
-          fi
-
-          # Run bandit - fail on medium+ severity issues
-          echo "🔍 Checking for code security issues..."
-          if ! uv run --with bandit bandit -r src/ -ll -f json -o bandit-report.json; then
-            echo "❌ FAILED: bandit found security issues (medium+ severity)"
-            cat bandit-report.json | jq -r '.results[] | "  - \(.filename):\(.line_number) [\(.test_id)] \(.issue_text)"' 2>/dev/null || true
-            SECURITY_FAILED=1
-          else
-            echo "✅ bandit passed - no security issues found"
-          fi
-
-          # Check for secrets - strict mode
-          echo "🔑 Checking for exposed secrets..."
-          if ! uv run detect-secrets scan --baseline .secrets.baseline; then
-            echo "❌ FAILED: detect-secrets found potential secrets"
-            echo "  Run 'uv run detect-secrets audit .secrets.baseline' to review"
-            SECURITY_FAILED=1
-          else
-            echo "✅ detect-secrets passed - no secrets detected"
-          fi
-
-          # Generate SARIF reports for GitHub Security tab
-          echo "📊 Generating SARIF reports..."
-          uv run --with bandit bandit -r src/ -f sarif -o bandit.sarif || true
-
-          if [ $SECURITY_FAILED -eq 1 ]; then
-            echo ""
-            echo "❌ Security audit failed! Please fix the issues above."
-            echo "💡 Tips:"
-            echo "  - For vulnerabilities: Update dependencies or add to exclusions if false positive"
-            echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
-            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"
-            exit 1
-          fi
+      - name: 🔒 Security audit and SBOM generation
+        uses: ./.github/actions/security-scan
+        with:
+          source-directory: src/
+          output-directory: .
+          fail-on-issues: 'true'
+          generate-sbom: 'true'
       - name: 📊 Interrogate (docstring coverage)
         run: |
           uv run interrogate -v src/ \
@@ -215,6 +170,7 @@ jobs:
             security-audit.json
             bandit-report.json
             bandit.sarif
+            sbom.json
             .secrets.baseline
           retention-days: 30
 

@@ -1,0 +1,153 @@
+name: CI (Refactored)
+
+on:
+  push:
+    branches: [ main, develop, "release/**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened ]
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: 'Run with debug logging'
+        required: false
+        default: false
+
+# Cancel in-progress runs for the same workflow and branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+
+env:
+  # Global environment variables
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # UV specific
+  UV_SYSTEM_PYTHON: "1"
+  UV_CACHE_DIR: ".cache/uv"
+
+# Set default permissions to read-only
+permissions:
+    contents: read
+
+jobs:
+  # Security scan job with fixes
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
+        with:
+          python-version: "3.12"
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
+          enable-cache: true
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv sync --locked --all-extras --dev
+          uv pip list
+
+      - name: 🔒 Run security scan
+        uses: ./.github/actions/security-scan
+        with:
+          source-directory: src/
+          output-directory: .
+          fail-on-issues: 'true'
+          generate-sbom: 'true'
+
+      - name: 📤 Upload security reports
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: security-reports-${{ github.sha }}
+          path: |
+            security-audit.json
+            bandit-report.json
+            bandit.sarif
+            sbom.json
+            .secrets.baseline
+          retention-days: 30
+
+      - name: 📊 Upload SARIF to GitHub Security
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
+        with:
+          sarif_file: bandit.sarif
+          category: bandit-security-scan
+
+  # Demo job showing fixed commands
+  demo-fixed-commands:
+    name: 🧪 Demo Fixed Commands
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
+        with:
+          python-version: "3.12"
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.x"
+          enable-cache: true
+
+      - name: 🔧 Install dependencies
+        run: |
+          uv sync --locked --all-extras --dev
+
+      - name: 🔍 Fixed Bandit command (JSON format)
+        run: |
+          echo "✅ Using JSON format (supported)"
+          uv run bandit -r src/ -f json -o bandit-report.json || echo "Bandit completed"
+
+      - name: 🔍 Fixed Bandit command (SARIF format with proper dependency)
+        run: |
+          echo "✅ Using SARIF format (now supported with bandit[sarif])"
+          uv run bandit -r src/ -f sarif -o bandit.sarif || echo "Bandit SARIF completed"
+
+      - name: 📋 Fixed cyclonedx-py command
+        run: |
+          echo "✅ Using correct cyclonedx-py syntax"
+          # OLD (broken): cyclonedx-py -r --format json
+          # NEW (correct): cyclonedx-py requirements --output-format json --output-file sbom.json
+          uv pip freeze > temp_requirements.txt
+          uv run cyclonedx-py requirements temp_requirements.txt --output-format json --output-file sbom.json
+          rm temp_requirements.txt
+          echo "SBOM generated successfully"
+
+      - name: 📋 Alternative cyclonedx-py usage (XML format)
+        run: |
+          echo "✅ Alternative: Generate SBOM in XML format"
+          uv pip freeze > temp_requirements.txt
+          uv run cyclonedx-py requirements temp_requirements.txt --output-format xml --output-file sbom.xml
+          rm temp_requirements.txt
+          echo "XML SBOM generated successfully"
+
+      - name: 📤 Upload demo artifacts
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: demo-artifacts-${{ github.sha }}
+          path: |
+            bandit-report.json
+            bandit.sarif
+            sbom.json
+            sbom.xml
+          retention-days: 7
