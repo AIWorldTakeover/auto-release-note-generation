@@ -24,7 +24,7 @@ dependencies = [
     "mcp>=1.10.1",                             # Model Context Protocol (security fix GHSA-j975-95f5-7wqh)
     "pydantic>=2.0.0,<3.0.0",                  # Data modeling and validation
     "pydantic-ai>=0.1.0,<1.0.0",               # Pydantic AI integration for AI-assisted features
-    "rich>=13.0.0,<14.0.0",                    # Rich terminal output for better CLI UX
+    "rich>=13.0.0,<15.0.0",                    # Rich terminal output for better CLI UX
     "urllib3>=2.5.0,<3.0.0",                   # HTTP library (pinned for security fix CVE-2025-50181, CVE-2025-50182)
 ]
 
