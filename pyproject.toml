@@ -21,6 +21,7 @@ authors = [
 # Main dependencies - pinned to major versions for compatibility
 dependencies = [
     "gitpython>=3.1.0,<4.0.0",                 # Git interaction library
+    "mcp>=1.10.0",                             # Model Context Protocol (security fix GHSA-j975-95f5-7wqh)
     "pydantic>=2.0.0,<3.0.0",                  # Data modeling and validation
     "pydantic-ai>=0.1.0,<1.0.0",               # Pydantic AI integration for AI-assisted features
     "rich>=13.0.0,<14.0.0",                    # Rich terminal output for better CLI UX
@@ -67,7 +68,7 @@ dev = [
     "pre-commit>=3.0.0,<4.0.0",                # Git hooks for quality checks
     "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
     "pip-audit>=2.5.0,<3.0.0",                 # Dependency vulnerability auditing
-    "bandit>=1.7.0,<2.0.0",                    # Security linting for Python code
+    "bandit>=1.7.6,<2.0.0",                    # Security linting for Python code
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
     # Jupyter notebook support (optional - only if using notebooks)

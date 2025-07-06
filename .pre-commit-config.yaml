@@ -164,10 +164,10 @@ repos:
         language: system
         types: [python]
         args:
-          - --cov=src,
-          - --cov-report=term-missing,
-          - --cov-report=xml:coverage.xml,
-          - --cov-fail-under=80,
+          - --cov=src
+          - --cov-report=term-missing
+          - "--cov-report=xml:coverage.xml"
+          - --cov-fail-under=80
           - --tb=short
         pass_filenames: false
         stages: [pre-push]
