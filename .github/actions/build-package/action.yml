@@ -1,0 +1,226 @@
+name: 'Build and Package'
+description: 'Build Python package with UV and validate artifacts'
+inputs:
+  python-version:
+    description: 'Python version for building'
+    required: false
+    default: '3.12'
+  build-wheel:
+    description: 'Build wheel distribution'
+    required: false
+    default: 'true'
+  build-sdist:
+    description: 'Build source distribution'
+    required: false
+    default: 'true'
+  validate-build:
+    description: 'Validate built packages with twine'
+    required: false
+    default: 'true'
+  test-installation:
+    description: 'Test package installation'
+    required: false
+    default: 'true'
+  output-dir:
+    description: 'Output directory for built packages'
+    required: false
+    default: 'dist'
+
+outputs:
+  package-version:
+    description: 'Version of built package'
+    value: ${{ steps.extract-version.outputs.version }}
+  wheel-file:
+    description: 'Path to built wheel file'
+    value: ${{ steps.build.outputs.wheel }}
+  sdist-file:
+    description: 'Path to built source distribution'
+    value: ${{ steps.build.outputs.sdist }}
+  build-status:
+    description: 'Build status (success/failed)'
+    value: ${{ steps.build.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🧹 Clean previous builds
+      shell: bash
+      run: |
+        echo "🧹 Cleaning previous build artifacts..."
+        rm -rf ${{ inputs.output-dir }} build *.egg-info
+        mkdir -p ${{ inputs.output-dir }}
+
+    - name: 📦 Build packages
+      id: build
+      shell: bash
+      run: |
+        echo "::group::Building packages"
+
+        BUILD_ARGS=""
+        if [[ "${{ inputs.build-wheel }}" == "true" ]]; then
+          BUILD_ARGS="$BUILD_ARGS --wheel"
+        fi
+        if [[ "${{ inputs.build-sdist }}" == "true" ]]; then
+          BUILD_ARGS="$BUILD_ARGS --sdist"
+        fi
+
+        if [[ -z "$BUILD_ARGS" ]]; then
+          echo "❌ No build outputs specified!"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "🔨 Building with: uv build $BUILD_ARGS"
+        if uv build $BUILD_ARGS --out-dir ${{ inputs.output-dir }}; then
+          echo "✅ Build completed successfully"
+          echo "status=success" >> $GITHUB_OUTPUT
+
+          # List built files
+          echo ""
+          echo "📦 Built packages:"
+          ls -la ${{ inputs.output-dir }}/
+
+          # Set outputs
+          if [[ "${{ inputs.build-wheel }}" == "true" ]]; then
+            WHEEL_FILE=$(ls ${{ inputs.output-dir }}/*.whl 2>/dev/null | head -1)
+            if [[ -n "$WHEEL_FILE" ]]; then
+              echo "wheel=$WHEEL_FILE" >> $GITHUB_OUTPUT
+              echo "  Wheel: $(basename $WHEEL_FILE)"
+            fi
+          fi
+
+          if [[ "${{ inputs.build-sdist }}" == "true" ]]; then
+            SDIST_FILE=$(ls ${{ inputs.output-dir }}/*.tar.gz 2>/dev/null | head -1)
+            if [[ -n "$SDIST_FILE" ]]; then
+              echo "sdist=$SDIST_FILE" >> $GITHUB_OUTPUT
+              echo "  Sdist: $(basename $SDIST_FILE)"
+            fi
+          fi
+        else
+          echo "❌ Build failed!"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "::endgroup::"
+
+    - name: 🔍 Extract version
+      id: extract-version
+      if: steps.build.outputs.status == 'success'
+      shell: bash
+      run: |
+        echo "::group::Extracting version"
+
+        # Try to extract from wheel first
+        if [[ -n "${{ steps.build.outputs.wheel }}" ]]; then
+          WHEEL_FILE="${{ steps.build.outputs.wheel }}"
+          VERSION=$(basename "$WHEEL_FILE" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+.*)-py[0-9]+-none-any\.whl/\1/')
+        elif [[ -n "${{ steps.build.outputs.sdist }}" ]]; then
+          SDIST_FILE="${{ steps.build.outputs.sdist }}"
+          VERSION=$(basename "$SDIST_FILE" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+.*)\.tar\.gz/\1/')
+        else
+          echo "❌ No package files found to extract version!"
+          exit 1
+        fi
+
+        echo "📌 Extracted version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+    - name: 📋 Validate packages
+      if: inputs.validate-build == 'true' && steps.build.outputs.status == 'success'
+      shell: bash
+      run: |
+        echo "::group::Validating packages"
+
+        echo "🔍 Running twine check..."
+        if uv run --with twine twine check ${{ inputs.output-dir }}/* --strict; then
+          echo "✅ Package validation passed"
+        else
+          echo "❌ Package validation failed!"
+          exit 1
+        fi
+
+        # Additional validation for wheel
+        if [[ -n "${{ steps.build.outputs.wheel }}" ]]; then
+          echo ""
+          echo "📦 Wheel contents preview:"
+          python -m zipfile -l "${{ steps.build.outputs.wheel }}" | head -20
+
+          # Check for required metadata
+          echo ""
+          echo "📋 Checking wheel metadata..."
+          unzip -p "${{ steps.build.outputs.wheel }}" '*.dist-info/METADATA' | grep -E '^(Name|Version|Summary|Author|License):' || true
+        fi
+
+        echo "::endgroup::"
+
+    - name: 🧪 Test installation
+      if: inputs.test-installation == 'true' && steps.build.outputs.status == 'success'
+      shell: bash
+      run: |
+        echo "::group::Testing installation"
+
+        # Test wheel installation if available
+        if [[ -n "${{ steps.build.outputs.wheel }}" ]]; then
+          echo "🧪 Testing wheel installation..."
+
+          # Create temporary virtual environment
+          TEMP_VENV=$(mktemp -d)/venv
+          uv venv "$TEMP_VENV" --python ${{ inputs.python-version }}
+
+          # Install and test
+          if "$TEMP_VENV/bin/pip" install "${{ steps.build.outputs.wheel }}"; then
+            echo "✅ Wheel installation successful"
+
+            # Try to import and get version
+            INSTALLED_VERSION=$("$TEMP_VENV/bin/python" -c "import auto_release_note_generation; print(auto_release_note_generation.__version__)" 2>/dev/null || echo "unknown")
+            echo "  Installed version: $INSTALLED_VERSION"
+          else
+            echo "❌ Wheel installation failed!"
+            exit 1
+          fi
+
+          rm -rf "$TEMP_VENV"
+        fi
+
+        # Test sdist installation if available
+        if [[ -n "${{ steps.build.outputs.sdist }}" ]]; then
+          echo ""
+          echo "🧪 Testing source distribution installation..."
+
+          # Create temporary virtual environment
+          TEMP_VENV=$(mktemp -d)/venv
+          uv venv "$TEMP_VENV" --python ${{ inputs.python-version }}
+
+          # Install and test
+          if "$TEMP_VENV/bin/pip" install "${{ steps.build.outputs.sdist }}"; then
+            echo "✅ Source distribution installation successful"
+          else
+            echo "❌ Source distribution installation failed!"
+            exit 1
+          fi
+
+          rm -rf "$TEMP_VENV"
+        fi
+
+        echo "::endgroup::"
+
+    - name: 📊 Generate build summary
+      if: always()
+      shell: bash
+      run: |
+        echo "### 📦 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Build Status | ${{ steps.build.outputs.status == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Package Version | ${{ steps.extract-version.outputs.version || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Python Version | ${{ inputs.python-version }} |" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ steps.build.outputs.status }}" == "success" ]]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Built Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          ls -lh ${{ inputs.output-dir }}/ | awk 'NR>1 {print "- `" $9 "` (" $5 ")"}' >> $GITHUB_STEP_SUMMARY
+        fi

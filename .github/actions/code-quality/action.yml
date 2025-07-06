@@ -1,0 +1,202 @@
+name: 'Code Quality Check'
+description: 'Run comprehensive code quality checks (linting, formatting, type checking)'
+inputs:
+  python-version:
+    description: 'Python version'
+    required: false
+    default: '3.12'
+  check-only:
+    description: 'Only check, do not fix issues'
+    required: false
+    default: 'true'
+  fail-on-error:
+    description: 'Fail on any quality issue'
+    required: false
+    default: 'true'
+  ruff-enabled:
+    description: 'Enable Ruff linting and formatting'
+    required: false
+    default: 'true'
+  mypy-enabled:
+    description: 'Enable mypy type checking'
+    required: false
+    default: 'true'
+  docstring-enabled:
+    description: 'Enable docstring coverage check'
+    required: false
+    default: 'true'
+  docstring-threshold:
+    description: 'Minimum docstring coverage percentage'
+    required: false
+    default: '60'
+
+outputs:
+  lint-status:
+    description: 'Linting status (passed/failed)'
+    value: ${{ steps.ruff-check.outputs.status }}
+  format-status:
+    description: 'Formatting status (passed/failed)'
+    value: ${{ steps.ruff-format.outputs.status }}
+  type-check-status:
+    description: 'Type checking status (passed/failed)'
+    value: ${{ steps.mypy-check.outputs.status }}
+  docstring-coverage:
+    description: 'Docstring coverage percentage'
+    value: ${{ steps.docstring-check.outputs.coverage }}
+  overall-status:
+    description: 'Overall quality check status'
+    value: ${{ steps.summary.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🔍 Check Ruff linting
+      id: ruff-check
+      if: inputs.ruff-enabled == 'true'
+      shell: bash
+      run: |
+        echo "::group::Ruff Linting"
+
+        if uv run ruff check src/ tests/ --output-format=json > ruff-check.json 2>&1; then
+          echo "✅ Ruff check passed - no issues found"
+          echo "status=passed" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Ruff found issues:"
+          uv run ruff check src/ tests/ --diff || true
+          echo "status=failed" >> $GITHUB_OUTPUT
+
+          if [[ "${{ inputs.check-only }}" != "true" ]]; then
+            echo "🔧 Attempting to fix issues..."
+            uv run ruff check src/ tests/ --fix
+            echo "Fixed what could be auto-fixed. Re-run to see remaining issues."
+          fi
+        fi
+
+        echo "::endgroup::"
+
+    - name: 🎨 Check code formatting
+      id: ruff-format
+      if: inputs.ruff-enabled == 'true'
+      shell: bash
+      run: |
+        echo "::group::Code Formatting"
+
+        if uv run ruff format --check src/ tests/; then
+          echo "✅ Code formatting is correct"
+          echo "status=passed" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Code formatting issues found"
+          echo "status=failed" >> $GITHUB_OUTPUT
+
+          if [[ "${{ inputs.check-only }}" != "true" ]]; then
+            echo "🔧 Formatting code..."
+            uv run ruff format src/ tests/
+            echo "Code has been formatted."
+          else
+            echo "Run 'uv run ruff format src/ tests/' to fix formatting"
+          fi
+        fi
+
+        echo "::endgroup::"
+
+    - name: 🧪 Type checking with mypy
+      id: mypy-check
+      if: inputs.mypy-enabled == 'true'
+      shell: bash
+      run: |
+        echo "::group::Type Checking"
+
+        mkdir -p reports
+
+        if uv run mypy src/ tests/ \
+          --config-file pyproject.toml \
+          --junit-xml reports/mypy.xml \
+          --pretty \
+          --show-error-context \
+          --show-error-codes; then
+          echo "✅ Type checking passed"
+          echo "status=passed" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Type checking found issues"
+          echo "status=failed" >> $GITHUB_OUTPUT
+
+          # Parse and show summary of errors
+          echo ""
+          echo "### Type Error Summary ###"
+          uv run mypy src/ tests/ --no-error-summary 2>&1 | grep -E "error:|note:" | head -20 || true
+        fi
+
+        echo "::endgroup::"
+
+    - name: 📊 Check docstring coverage
+      id: docstring-check
+      if: inputs.docstring-enabled == 'true'
+      shell: bash
+      run: |
+        echo "::group::Docstring Coverage"
+
+        mkdir -p docs/badges
+
+        # Run interrogate and capture coverage
+        OUTPUT=$(uv run interrogate -v src/ \
+          --fail-under ${{ inputs.docstring-threshold }} \
+          --exclude "*/tests/*" \
+          --exclude "*/__init__.py" \
+          --ignore-init-method \
+          --ignore-magic \
+          --generate-badge docs/badges/ \
+          --badge-format svg 2>&1) || FAILED=$?
+
+        echo "$OUTPUT"
+
+        # Extract coverage percentage
+        COVERAGE=$(echo "$OUTPUT" | grep -oP 'RESULT \d+\.\d+' | grep -oP '\d+\.\d+' || echo "0")
+        echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+
+        if [[ ${FAILED:-0} -ne 0 ]]; then
+          echo "⚠️ Docstring coverage is below threshold ($COVERAGE% < ${{ inputs.docstring-threshold }}%)"
+          echo "status=failed" >> $GITHUB_OUTPUT
+        else
+          echo "✅ Docstring coverage passed ($COVERAGE%)"
+          echo "status=passed" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"
+
+    - name: 📋 Generate quality summary
+      id: summary
+      if: always()
+      shell: bash
+      run: |
+        # Determine overall status
+        OVERALL_PASSED=true
+
+        if [[ "${{ inputs.ruff-enabled }}" == "true" ]]; then
+          if [[ "${{ steps.ruff-check.outputs.status }}" == "failed" ]] || \
+             [[ "${{ steps.ruff-format.outputs.status }}" == "failed" ]]; then
+            OVERALL_PASSED=false
+          fi
+        fi
+
+        if [[ "${{ inputs.mypy-enabled }}" == "true" ]] && \
+           [[ "${{ steps.mypy-check.outputs.status }}" == "failed" ]]; then
+          OVERALL_PASSED=false
+        fi
+
+        if [[ "${{ inputs.docstring-enabled }}" == "true" ]] && \
+           [[ "${{ inputs.fail-on-error }}" == "true" ]] && \
+           [[ "${{ steps.docstring-check.outputs.status }}" == "failed" ]]; then
+          OVERALL_PASSED=false
+        fi
+
+        if [[ "$OVERALL_PASSED" == "true" ]]; then
+          echo "status=passed" >> $GITHUB_OUTPUT
+          echo "✅ All quality checks passed!"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Some quality checks failed"
+
+          if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+            exit 1
+          fi
+        fi

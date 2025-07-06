@@ -1,52 +1,56 @@
-name: 'Run Tests'
-description: 'Run pytest with configurable options and coverage'
+name: "Run Tests"
+description: "Run pytest with configurable options and coverage"
 inputs:
   python-version:
-    description: 'Python version for display purposes'
+    description: "Python version for display purposes"
     required: false
-    default: '3.12'
+    default: "3.12"
   os:
-    description: 'Operating system for display purposes'
+    description: "Operating system for display purposes"
     required: false
-    default: 'ubuntu-latest'
+    default: "ubuntu-latest"
   coverage-enabled:
-    description: 'Enable coverage reporting'
+    description: "Enable coverage reporting"
     required: false
-    default: 'false'
+    default: "false"
   coverage-fail-under:
-    description: 'Minimum coverage percentage'
+    description: "Minimum coverage percentage"
     required: false
-    default: '80'
+    default: "80"
   parallel:
-    description: 'Run tests in parallel'
+    description: "Run tests in parallel"
     required: false
-    default: 'true'
+    default: "true"
   benchmark:
-    description: 'Run benchmarks'
+    description: "Run benchmarks"
     required: false
-    default: 'false'
+    default: "false"
   upload-results:
-    description: 'Upload test results as artifacts'
+    description: "Upload test results as artifacts"
     required: false
-    default: 'true'
+    default: "true"
   test-flags:
-    description: 'Additional pytest flags'
+    description: "Additional pytest flags"
     required: false
-    default: ''
+    default: ""
+  artifact-suffix:
+    description: "Additional suffix for artifact name to avoid conflicts"
+    required: false
+    default: ""
 
 outputs:
   test-status:
-    description: 'Test execution status'
+    description: "Test execution status"
     value: ${{ steps.test-run.outputs.status }}
   coverage-percentage:
-    description: 'Coverage percentage (if coverage enabled)'
+    description: "Coverage percentage (if coverage enabled)"
     value: ${{ steps.coverage-check.outputs.percentage }}
   test-report-path:
-    description: 'Path to test report XML'
+    description: "Path to test report XML"
     value: ${{ steps.test-run.outputs.report-path }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: 🧪 Run tests
       id: test-run
@@ -123,9 +127,9 @@ runs:
 
     - name: 📤 Upload test results
       if: always() && inputs.upload-results == 'true'
-      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
       with:
-        name: test-results-${{ inputs.python-version }}-${{ inputs.os }}-${{ github.sha }}-${{ github.run_id }}
+        name: test-results-${{ inputs.coverage-enabled == 'true' && 'coverage' || 'matrix' }}-${{ inputs.python-version }}-${{ inputs.os }}-${{ github.sha }}-${{ github.run_id }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}
         path: |
           reports/pytest-*.xml
           coverage.xml

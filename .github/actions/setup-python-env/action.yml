@@ -1,45 +1,45 @@
-name: 'Setup Python Environment'
-description: 'Set up Python and UV with intelligent caching'
+name: "Setup Python Environment"
+description: "Set up Python and UV with intelligent caching"
 inputs:
   python-version:
-    description: 'Python version to install'
+    description: "Python version to install"
     required: false
-    default: '3.12'
+    default: "3.12"
   uv-version:
-    description: 'UV version to install'
+    description: "UV version to install"
     required: false
-    default: '0.4.x'
+    default: "0.4.x"
   cache-key-suffix:
-    description: 'Additional cache key suffix'
+    description: "Additional cache key suffix"
     required: false
-    default: ''
+    default: ""
   install-dependencies:
-    description: 'Whether to install dependencies'
+    description: "Whether to install dependencies"
     required: false
-    default: 'true'
+    default: "true"
   extras:
-    description: 'Extras to install (comma-separated)'
+    description: "Extras to install (comma-separated)"
     required: false
-    default: 'all-extras'
+    default: "all-extras"
   dev:
-    description: 'Install development dependencies'
+    description: "Install development dependencies"
     required: false
-    default: 'true'
+    default: "true"
 
 outputs:
   python-version:
-    description: 'The installed Python version'
+    description: "The installed Python version"
     value: ${{ steps.setup-python.outputs.python-version }}
   cache-hit:
-    description: 'Whether the UV cache was hit'
+    description: "Whether the UV cache was hit"
     value: ${{ steps.setup-uv.outputs.cache-hit }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: 🐍 Set up Python ${{ inputs.python-version }}
       id: setup-python
-      uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f  # v5.1.1
+      uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f # v5.1.1
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -70,7 +70,7 @@ runs:
       if: inputs.install-dependencies == 'true'
       shell: bash
       run: |
-        INSTALL_CMD="uv sync --python ${{ inputs.python-version }} --locked"
+        INSTALL_CMD="uv sync --python ${{ inputs.python-version }}"
 
         # Add extras if specified
         if [[ "${{ inputs.extras }}" != "" && "${{ inputs.extras }}" != "none" ]]; then
