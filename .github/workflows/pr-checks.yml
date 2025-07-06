@@ -1,0 +1,168 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened ]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Global environment variables
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # UV specific
+  UV_SYSTEM_PYTHON: "1"
+
+# Set default permissions to read-only
+permissions:
+  contents: read
+
+jobs:
+  # Quick quality checks - run in parallel
+  quality-checks:
+    name: 🔍 Quality Checks
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      security-events: write
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+          cache-key-suffix: "quality"
+
+      - name: 🔍 Run pre-commit hooks
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
+        with:
+          extra_args: --all-files --verbose
+        env:
+          SKIP: pytest-fast,pytest-full,mypy  # These run separately
+
+      - name: 🔒 Security scan
+        uses: ./.github/actions/security-scan
+        with:
+          fail-on-vulnerability: "true"
+
+      - name: 📊 Interrogate (docstring coverage)
+        run: |
+          mkdir -p badges
+          uv run interrogate -v src/ \
+            --fail-under 60 \
+            --exclude "*/tests/*" \
+            --exclude "*/__init__.py" \
+            --ignore-init-method \
+            --ignore-magic \
+            --badge-format svg \
+            --generate-badge badges/
+
+      - name: 🔍 Dependency Review
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9  # v4.7.1
+        with:
+          fail-on-severity: high
+          vulnerability-check: true
+          license-check: true
+          allow-licenses: MIT, Apache-2.0, BSD-3-Clause, BSD-2-Clause, ISC, Python-2.0
+
+  # Type checking - separate job for clarity
+  type-check:
+    name: 🔍 Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+          cache-key-suffix: "types"
+
+      - name: 🧪 Run mypy
+        run: |
+          uv run mypy src/ tests/ \
+            --config-file pyproject.toml \
+            --junit-xml reports/mypy.xml
+        continue-on-error: true
+
+      - name: 📊 Upload mypy results
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: mypy-results-pr-${{ github.event.pull_request.number }}
+          path: reports/
+          retention-days: 7
+
+  # Fast test run - only on latest Python
+  test-fast:
+    name: 🧪 Fast Tests (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+          cache-key-suffix: "test"
+
+      - name: 🧪 Run tests
+        uses: ./.github/actions/run-tests
+        with:
+          python-version: "3.12"
+          os: "ubuntu-latest"
+          coverage-enabled: "true"
+          coverage-fail-under: "80"
+
+  # Summary job
+  pr-checks-complete:
+    name: ✅ PR Checks Complete
+    if: always()
+    needs: [quality-checks, type-check, test-fast]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🎯 Check if all required checks passed
+        run: |
+          # Check job results
+          FAILED_JOBS=""
+          if [[ "${{ needs.quality-checks.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}quality-checks "
+          fi
+          if [[ "${{ needs.type-check.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}type-check "
+          fi
+          if [[ "${{ needs.test-fast.result }}" == "failure" ]]; then
+            FAILED_JOBS="${FAILED_JOBS}test-fast "
+          fi
+
+          if [[ -n "$FAILED_JOBS" ]]; then
+            echo "❌ Failed jobs: $FAILED_JOBS"
+            exit 1
+          else
+            echo "✅ All PR checks passed!"
+          fi
+
+      - name: 📊 Generate PR summary
+        if: always()
+        run: |
+          echo "# PR Checks Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Checks | ${{ needs.quality-checks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type Check | ${{ needs.type-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fast Tests | ${{ needs.test-fast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**PR:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** @${{ github.event.pull_request.user.login }}" >> $GITHUB_STEP_SUMMARY

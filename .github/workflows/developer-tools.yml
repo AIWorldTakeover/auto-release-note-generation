@@ -1,0 +1,268 @@
+name: Developer Tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - update-dependencies
+          - clear-caches
+          - debug-info
+          - benchmark
+          - profile-tests
+      python-version:
+        description: 'Python version (for some actions)'
+        required: false
+        type: string
+        default: '3.12'
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  # Update dependencies
+  update-dependencies:
+    name: 📦 Update Dependencies
+    if: github.event.inputs.action == 'update-dependencies'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ github.event.inputs.python-version }}
+          install-dependencies: "false"
+
+      - name: 📦 Update dependencies
+        run: |
+          echo "## Dependency Update Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show current lock file status
+          echo "### Current Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          uv lock --check || echo "Lock file needs update" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Update all dependencies
+          echo "Updating all dependencies..."
+          uv lock --upgrade
+
+          # Show what changed
+          echo "### Changes" >> $GITHUB_STEP_SUMMARY
+          if git diff --quiet uv.lock; then
+            echo "✅ No dependency updates available" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "📦 Dependencies updated:" >> $GITHUB_STEP_SUMMARY
+            echo '```diff' >> $GITHUB_STEP_SUMMARY
+            git diff uv.lock | head -100 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 🧪 Test updated dependencies
+        run: |
+          uv sync --all-extras --dev
+          uv run pytest tests/ -x --tb=short
+
+      - name: 🔒 Security check
+        uses: ./.github/actions/security-scan
+        with:
+          fail-on-vulnerability: "false"
+
+      - name: 📝 Create PR
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f  # v7.0.5
+        with:
+          title: '⬆️ Update dependencies'
+          body: |
+            ## Dependency Updates
+
+            This PR updates all dependencies to their latest compatible versions.
+
+            ### Checks
+            - [x] Dependencies updated
+            - [x] Tests pass
+            - [x] Security scan complete
+
+            Please review the changes and merge if everything looks good.
+          branch: deps/update-all
+          commit-message: 'chore(deps): update all dependencies'
+          labels: dependencies,automated
+
+  # Clear GitHub Actions caches
+  clear-caches:
+    name: 🧹 Clear Caches
+    if: github.event.inputs.action == 'clear-caches'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧹 Clear caches
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            console.log('Fetching caches...');
+            const caches = await github.rest.actions.getActionsCacheList({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            console.log(`Found ${caches.data.total_count} caches`);
+
+            let deleted = 0;
+            for (const cache of caches.data.actions_caches) {
+              console.log(`Deleting cache: ${cache.key}`);
+              try {
+                await github.rest.actions.deleteActionsCacheById({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  cache_id: cache.id,
+                });
+                deleted++;
+              } catch (error) {
+                console.error(`Failed to delete cache ${cache.key}: ${error.message}`);
+              }
+            }
+
+            console.log(`Deleted ${deleted} caches`);
+
+            // Add to summary
+            core.summary
+              .addHeading('Cache Cleanup Report')
+              .addRaw(`Total caches found: ${caches.data.total_count}`)
+              .addRaw(`Caches deleted: ${deleted}`)
+              .write();
+
+  # Debug information
+  debug-info:
+    name: 🔍 Debug Information
+    if: github.event.inputs.action == 'debug-info'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ github.event.inputs.python-version }}
+
+      - name: 🔍 Gather debug information
+        run: |
+          echo "## Debug Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # System info
+          echo "### System Information" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "OS: $(uname -a)" >> $GITHUB_STEP_SUMMARY
+          echo "CPU: $(nproc) cores" >> $GITHUB_STEP_SUMMARY
+          echo "Memory: $(free -h | grep Mem | awk '{print $2}')" >> $GITHUB_STEP_SUMMARY
+          echo "Disk: $(df -h / | tail -1 | awk '{print $4}' ) free" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Python info
+          echo "### Python Environment" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          python --version >> $GITHUB_STEP_SUMMARY
+          echo "Location: $(which python)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # UV info
+          echo "### UV Information" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          uv --version >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Dependency tree
+          echo "### Dependency Tree" >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>Click to expand</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          uv tree >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
+
+  # Run benchmarks
+  benchmark:
+    name: 📊 Run Benchmarks
+    if: github.event.inputs.action == 'benchmark'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ github.event.inputs.python-version }}
+
+      - name: 📊 Run benchmarks
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Run pytest with benchmarks enabled
+          uv run pytest tests/ \
+            --benchmark-only \
+            --benchmark-json=benchmark.json \
+            --benchmark-verbose
+
+          # Parse and display results
+          if [[ -f benchmark.json ]]; then
+            python .github/scripts/parse_benchmarks.py >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📤 Upload benchmark results
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark.json
+          retention-days: 30
+
+  # Profile test execution
+  profile-tests:
+    name: 🔬 Profile Tests
+    if: github.event.inputs.action == 'profile-tests'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ github.event.inputs.python-version }}
+
+      - name: 🔬 Profile test execution
+        run: |
+          echo "## Test Profiling Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Run tests with profiling
+          uv run pytest tests/ \
+            --durations=20 \
+            --durations-min=0.1 \
+            -v | tee test-profile.txt
+
+          echo "### Slowest Tests" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 20 "slowest durations" test-profile.txt >> $GITHUB_STEP_SUMMARY || echo "No timing data available" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: 📤 Upload profiling results
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: test-profile-${{ github.run_id }}
+          path: test-profile.txt
+          retention-days: 7
