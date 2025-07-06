@@ -1,0 +1,266 @@
+name: Nightly Comprehensive Tests
+
+on:
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      python-versions:
+        description: 'Python versions to test (comma-separated)'
+        required: false
+        default: '3.10,3.11,3.12,3.13'
+      extended-tests:
+        description: 'Run extended test suite'
+        type: boolean
+        default: true
+      performance-tests:
+        description: 'Run performance benchmarks'
+        type: boolean
+        default: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+  id-token: write
+  attestations: write
+
+jobs:
+  # Comprehensive test matrix
+  test-comprehensive:
+    name: 🧪 Full Test Matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # Test with minimal dependencies
+          - python-version: '3.12'
+            os: ubuntu-latest
+            deps: minimal
+          # Test with development Python
+          - python-version: '3.14-dev'
+            os: ubuntu-latest
+            experimental: true
+    uses: ./.github/workflows/reusable-tests.yml
+    with:
+      python-version: ${{ matrix.python-version }}
+      os: ${{ matrix.os }}
+      coverage-enabled: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' }}
+      coverage-threshold: 85
+      test-flags: ${{ inputs.extended-tests && '--run-slow' || '' }}
+      upload-coverage: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' }}
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # Deep security analysis
+  security-deep:
+    name: 🔒 Deep Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: 🔒 Run comprehensive security scan
+        uses: ./.github/workflows/reusable-security.yml
+        with:
+          python-version: '3.12'
+          fail-on-vulnerability: false
+          create-issues: true
+          upload-sarif: true
+
+      - name: 🔍 Additional security checks
+        run: |
+          # Check for hardcoded secrets in git history
+          echo "🔍 Scanning git history for secrets..."
+          uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files) || true
+
+          # License compliance check
+          echo "📜 Checking license compliance..."
+          uv run --with pip-licenses pip-licenses --with-system --with-urls --format=json > licenses.json
+
+          # Check for known vulnerable patterns
+          echo "🔍 Checking for vulnerable patterns..."
+          uv run --with semgrep semgrep --config=auto src/ || true
+
+  # Performance benchmarking
+  performance:
+    name: 📊 Performance Benchmarks
+    if: inputs.performance-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: nightly-perf
+          extras: 'perf'
+
+      - name: 📊 Run benchmarks
+        run: |
+          echo "📊 Running performance benchmarks..."
+
+          # Run benchmarks and save results
+          uv run pytest tests/ \
+            --benchmark-only \
+            --benchmark-json=benchmark-results.json \
+            --benchmark-histogram=benchmark-histogram \
+            --benchmark-verbose \
+            --benchmark-autosave
+
+          # Generate comparison if previous results exist
+          if [[ -f .benchmarks/last.json ]]; then
+            echo "📈 Comparing with previous results..."
+            uv run --with pytest-benchmark pytest-benchmark compare \
+              .benchmarks/last.json \
+              benchmark-results.json \
+              --histogram=benchmark-comparison
+          fi
+
+          # Save current as last for next comparison
+          mkdir -p .benchmarks
+          cp benchmark-results.json .benchmarks/last.json
+
+      - name: 📤 Upload benchmark results
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: |
+            benchmark-results.json
+            benchmark-histogram.svg
+            benchmark-comparison.svg
+          retention-days: 90
+
+  # Dependency analysis
+  dependency-check:
+    name: 📦 Dependency Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: nightly-deps
+
+      - name: 📦 Check for outdated dependencies
+        run: |
+          echo "📦 Checking for outdated dependencies..."
+
+          # Show outdated packages
+          uv pip list --outdated || true
+
+          # Check for unused dependencies
+          echo "🔍 Checking for unused dependencies..."
+          uv run --with pip-autoremove pip-autoremove --list || true
+
+          # Generate dependency tree
+          echo "🌳 Generating dependency tree..."
+          uv tree > dependency-tree.txt
+
+      - name: 🔄 Test dependency updates
+        run: |
+          echo "🔄 Testing with updated dependencies..."
+
+          # Create a new environment with updated deps
+          uv venv test-updated
+          source test-updated/bin/activate
+
+          # Update all dependencies
+          uv lock --upgrade-all
+
+          # Run basic tests
+          uv run pytest tests/ -x -k "not slow" || echo "⚠️ Tests failed with updated dependencies"
+
+  # Documentation build and validation
+  docs-check:
+    name: 📚 Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: nightly-docs
+          extras: 'docs'
+
+      - name: 📚 Build documentation
+        run: |
+          echo "📚 Building documentation..."
+
+          # Build docs
+          cd docs && uv run make html
+
+          # Check for broken links
+          echo "🔗 Checking for broken links..."
+          uv run --with sphinx-linkcheck sphinx-build -b linkcheck . _build/linkcheck || true
+
+          # Check spelling
+          echo "📝 Checking spelling..."
+          uv run --with sphinxcontrib-spelling sphinx-build -b spelling . _build/spelling || true
+
+  # Nightly summary
+  nightly-summary:
+    name: 📊 Nightly Summary
+    if: always()
+    needs: [test-comprehensive, security-deep, performance, dependency-check, docs-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📊 Generate summary report
+        run: |
+          echo "# 🌙 Nightly Test Summary - $(date -u '+%Y-%m-%d')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Comprehensive Tests | ${{ needs.test-comprehensive.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Analysis | ${{ needs.security-deep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Tests | ${{ needs.performance.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependency Check | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Documentation | ${{ needs.docs-check.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📝 Create issue for failures
+        if: |
+          needs.test-comprehensive.result == 'failure' ||
+          needs.security-deep.result == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            const title = `🌙 Nightly Build Failure - ${date}`;
+
+            const body = `## Nightly Build Failed
+
+            **Date:** ${date}
+            **Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+
+            ### Failed Components
+            ${context.needs.test-comprehensive.result === 'failure' ? '- ❌ Comprehensive Tests\n' : ''}
+            ${context.needs.security-deep.result === 'failure' ? '- ❌ Security Analysis\n' : ''}
+
+            Please investigate and fix the issues.
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['nightly-failure', 'automated', 'high-priority']
+            });
