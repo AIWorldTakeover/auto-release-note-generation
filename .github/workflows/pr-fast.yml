@@ -1,0 +1,283 @@
+name: PR Fast Checks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened ]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: pr-fast-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  # Quick change detection
+  changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      skip-ci: ${{ steps.check-skip.outputs.skip }}
+      python: ${{ steps.filter.outputs.python }}
+      docs: ${{ steps.filter.outputs.docs }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+        with:
+          fetch-depth: 2  # Need previous commit for skip check
+
+      - name: 🏃 Check skip CI
+        id: check-skip
+        run: |
+          # Check for [skip ci] or [ci skip] in commit message
+          if git log -1 --pretty='%s%b' | grep -qiE '\[(skip ci|ci skip)\]'; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Skipping CI due to [skip ci] in commit message"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🔍 Path filter
+        if: steps.check-skip.outputs.skip != 'true'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            docs:
+              - 'docs/**'
+              - '*.md'
+              - '*.rst'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actions/**'
+
+  # Fast quality checks - all in parallel
+  quality-lint:
+    name: 🎨 Lint & Format
+    needs: [changes]
+    if: needs.changes.outputs.skip-ci != 'true' && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: pr-lint
+
+      - name: 🎨 Code quality check
+        uses: ./.github/actions/code-quality
+        with:
+          python-version: '3.12'
+          check-only: 'true'
+          fail-on-error: 'true'
+          mypy-enabled: 'false'  # Run separately for better parallelism
+          docstring-enabled: 'false'  # Not critical for PRs
+
+  quality-types:
+    name: 🧪 Type Check
+    needs: [changes]
+    if: needs.changes.outputs.skip-ci != 'true' && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: pr-types
+
+      - name: 🧪 Type checking
+        uses: ./.github/actions/code-quality
+        with:
+          python-version: '3.12'
+          ruff-enabled: 'false'
+          mypy-enabled: 'true'
+          docstring-enabled: 'false'
+          fail-on-error: 'false'  # Don't block PR on type errors
+
+  # Fast security check
+  security-quick:
+    name: 🔒 Security Quick Scan
+    needs: [changes]
+    if: needs.changes.outputs.skip-ci != 'true' && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: pr-security
+
+      - name: 🔒 Security scan (critical only)
+        uses: ./.github/actions/security-scan
+        with:
+          fail-on-vulnerability: 'true'
+          pip-audit-enabled: 'true'
+          bandit-enabled: 'true'
+          detect-secrets-enabled: 'false'  # Slower, run in full CI
+
+  # Fast test with coverage
+  test-fast:
+    name: 🚀 Fast Test
+    needs: [changes]
+    if: needs.changes.outputs.skip-ci != 'true' && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: '3.12'
+          cache-key-suffix: pr-test
+
+      - name: 🧪 Run tests
+        uses: ./.github/actions/run-tests
+        with:
+          python-version: '3.12'
+          os: 'ubuntu-latest'
+          coverage-enabled: 'true'
+          coverage-fail-under: '0'  # Don't fail PR on coverage
+          parallel: 'true'
+          benchmark: 'false'
+
+      - name: 📊 Comment coverage
+        if: always()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Try to read coverage data
+            let coverageText = '📊 **Coverage Report**\n\n';
+            try {
+              const coverageData = JSON.parse(fs.readFileSync('coverage.json', 'utf8'));
+              const percentage = coverageData.totals.percent_covered.toFixed(1);
+
+              coverageText += `Overall coverage: **${percentage}%**\n\n`;
+
+              // Add emoji based on coverage
+              if (percentage >= 90) {
+                coverageText = '🟢 ' + coverageText;
+              } else if (percentage >= 80) {
+                coverageText = '🟡 ' + coverageText;
+              } else {
+                coverageText = '🔴 ' + coverageText;
+              }
+            } catch (e) {
+              coverageText += 'Coverage data not available';
+            }
+
+            // Find or create comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Coverage Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: coverageText
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: coverageText
+              });
+            }
+
+  # PR status check
+  pr-status:
+    name: ✅ PR Status
+    if: always()
+    needs: [changes, quality-lint, quality-types, security-quick, test-fast]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🎯 Check PR status
+        run: |
+          # Skip if CI was skipped
+          if [[ "${{ needs.changes.outputs.skip-ci }}" == "true" ]]; then
+            echo "⏭️ CI skipped by request"
+            exit 0
+          fi
+
+          # Collect results
+          FAILED_CHECKS=""
+          WARNINGS=""
+
+          # Required checks
+          if [[ "${{ needs.quality-lint.result }}" == "failure" ]]; then
+            FAILED_CHECKS="${FAILED_CHECKS}lint "
+          fi
+          if [[ "${{ needs.security-quick.result }}" == "failure" ]]; then
+            FAILED_CHECKS="${FAILED_CHECKS}security "
+          fi
+          if [[ "${{ needs.test-fast.result }}" == "failure" ]]; then
+            FAILED_CHECKS="${FAILED_CHECKS}tests "
+          fi
+
+          # Optional checks (warnings only)
+          if [[ "${{ needs.quality-types.result }}" == "failure" ]]; then
+            WARNINGS="${WARNINGS}type-check "
+          fi
+
+          # Generate summary
+          echo "# 🚀 PR Fast Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status | Required |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Format | ${{ needs.quality-lint.result }} | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type Check | ${{ needs.quality-types.result }} | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security-quick.result }} | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test-fast.result }} | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Final status
+          if [[ -n "$FAILED_CHECKS" ]]; then
+            echo "❌ **PR checks failed!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Failed checks: $FAILED_CHECKS" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          elif [[ -n "$WARNINGS" ]]; then
+            echo "⚠️ **PR checks passed with warnings**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Warnings in: $WARNINGS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **All PR checks passed!**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*These are fast checks. Full CI will run after merge.*" >> $GITHUB_STEP_SUMMARY
