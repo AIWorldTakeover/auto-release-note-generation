@@ -1,0 +1,106 @@
+name: Reusable Test Workflow
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to test'
+        required: true
+        type: string
+      os:
+        description: 'Operating system'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      coverage-enabled:
+        description: 'Enable coverage reporting'
+        required: false
+        type: boolean
+        default: false
+      coverage-threshold:
+        description: 'Minimum coverage percentage'
+        required: false
+        type: number
+        default: 80
+      test-flags:
+        description: 'Additional pytest flags'
+        required: false
+        type: string
+        default: ''
+      upload-coverage:
+        description: 'Upload coverage to Codecov'
+        required: false
+        type: boolean
+        default: false
+      runner-size:
+        description: 'GitHub runner size'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    outputs:
+      test-status:
+        description: 'Test execution status'
+        value: ${{ jobs.test.outputs.status }}
+      coverage-percentage:
+        description: 'Coverage percentage'
+        value: ${{ jobs.test.outputs.coverage }}
+    secrets:
+      CODECOV_TOKEN:
+        description: 'Codecov token for coverage upload'
+        required: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+jobs:
+  test:
+    name: Test Python ${{ inputs.python-version }} on ${{ inputs.os }}
+    runs-on: ${{ inputs.runner-size }}
+    outputs:
+      status: ${{ steps.test-run.outputs.status }}
+      coverage: ${{ steps.test-run.outputs.coverage }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache-key-suffix: test-${{ inputs.os }}
+
+      - name: 🧪 Run tests
+        id: test-run
+        uses: ./.github/actions/run-tests
+        with:
+          python-version: ${{ inputs.python-version }}
+          os: ${{ inputs.os }}
+          coverage-enabled: ${{ inputs.coverage-enabled }}
+          coverage-fail-under: ${{ inputs.coverage-threshold }}
+          test-flags: ${{ inputs.test-flags }}
+
+      - name: 📈 Upload coverage to Codecov
+        if: inputs.upload-coverage && inputs.coverage-enabled && always()
+        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673  # v4.5.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage.xml
+          flags: py${{ inputs.python-version }}-${{ inputs.os }}
+          name: codecov-py${{ inputs.python-version }}-${{ inputs.os }}
+          fail_ci_if_error: false
+
+      - name: 📊 Generate test summary
+        if: always()
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Version | ${{ inputs.python-version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Operating System | ${{ inputs.os }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Status | ${{ steps.test-run.outputs.test-status || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ inputs.coverage-enabled }}" == "true" ]]; then
+            echo "| Coverage | ${{ steps.test-run.outputs.coverage-percentage || 'N/A' }}% |" >> $GITHUB_STEP_SUMMARY
+          fi

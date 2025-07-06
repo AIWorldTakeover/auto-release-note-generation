@@ -1,0 +1,162 @@
+name: Reusable Security Workflow
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version for security scanning'
+        required: false
+        type: string
+        default: '3.12'
+      fail-on-vulnerability:
+        description: 'Fail workflow on vulnerability detection'
+        required: false
+        type: boolean
+        default: true
+      create-issues:
+        description: 'Create GitHub issues for vulnerabilities'
+        required: false
+        type: boolean
+        default: false
+      upload-sarif:
+        description: 'Upload results in SARIF format for GitHub Security'
+        required: false
+        type: boolean
+        default: true
+      runner-size:
+        description: 'GitHub runner size'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    outputs:
+      vulnerabilities-found:
+        description: 'Whether vulnerabilities were found'
+        value: ${{ jobs.security-scan.outputs.vulnerabilities-found }}
+      vulnerability-count:
+        description: 'Number of vulnerabilities found'
+        value: ${{ jobs.security-scan.outputs.vulnerability-count }}
+      security-report:
+        description: 'Security scan report artifact name'
+        value: ${{ jobs.security-scan.outputs.report-artifact }}
+
+env:
+  PYTHONUNBUFFERED: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ${{ inputs.runner-size }}
+    outputs:
+      vulnerabilities-found: ${{ steps.scan.outputs.vulnerabilities-found }}
+      vulnerability-count: ${{ steps.summary.outputs.count }}
+      report-artifact: security-report-${{ github.sha }}-${{ github.run_id }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache-key-suffix: security
+
+      - name: 🔒 Run comprehensive security scan
+        id: scan
+        uses: ./.github/actions/security-scan
+        with:
+          fail-on-issues: ${{ inputs.fail-on-vulnerability }}
+          generate-sbom: true
+
+      - name: 📊 Process security results
+        id: summary
+        if: always()
+        run: |
+          VULN_COUNT=0
+
+          # Count pip-audit vulnerabilities
+          if [[ -f "security-audit.json" ]]; then
+            PIP_VULNS=$(jq -r '.vulnerabilities | length' security-audit.json 2>/dev/null || echo "0")
+            VULN_COUNT=$((VULN_COUNT + PIP_VULNS))
+          fi
+
+          # Count bandit issues
+          if [[ -f "bandit-report.json" ]]; then
+            BANDIT_ISSUES=$(jq -r '.results | length' bandit-report.json 2>/dev/null || echo "0")
+            VULN_COUNT=$((VULN_COUNT + BANDIT_ISSUES))
+          fi
+
+          echo "count=$VULN_COUNT" >> $GITHUB_OUTPUT
+
+      - name: 🔐 Generate SARIF reports
+        if: inputs.upload-sarif && always()
+        run: |
+          # Convert bandit JSON to SARIF
+          if [[ -f "bandit-report.json" ]]; then
+            # Use bandit with SARIF support
+            uv run --with "bandit[sarif]>=1.7.0" bandit -r src/ -f sarif -o bandit.sarif || true
+          fi
+
+      - name: 📤 Upload SARIF to GitHub Security
+        if: inputs.upload-sarif && always()
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+        continue-on-error: true
+
+
+      - name: 📝 Create security issues
+        if: inputs.create-issues && steps.scan.outputs.vulnerabilities-found == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const vulnCount = ${{ steps.summary.outputs.count }};
+            const title = `🔒 Security Audit: ${vulnCount} vulnerabilities found`;
+
+            // Check for existing open security issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,automated',
+              state: 'open'
+            });
+
+            const body = `## Security Scan Results
+
+            Found **${vulnCount}** security vulnerabilities.
+
+            | Scanner | Status |
+            |---------|--------|
+            | pip-audit | ${{ steps.scan.outputs.pip-audit-status }} |
+            | bandit | ${{ steps.scan.outputs.bandit-status }} |
+            | detect-secrets | ${{ steps.scan.outputs.secrets-status }} |
+
+            View the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.
+
+            ---
+            *This issue was automatically created by the security workflow.*`;
+
+            if (issues.data.length > 0) {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                title: title,
+                body: body
+              });
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'automated', 'high-priority']
+              });
+            }
