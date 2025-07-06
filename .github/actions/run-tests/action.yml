@@ -1,0 +1,139 @@
+name: "Run Tests"
+description: "Run pytest with configurable options and coverage"
+inputs:
+  python-version:
+    description: "Python version for display purposes"
+    required: false
+    default: "3.12"
+  os:
+    description: "Operating system for display purposes"
+    required: false
+    default: "ubuntu-latest"
+  coverage-enabled:
+    description: "Enable coverage reporting"
+    required: false
+    default: "false"
+  coverage-fail-under:
+    description: "Minimum coverage percentage"
+    required: false
+    default: "80"
+  parallel:
+    description: "Run tests in parallel"
+    required: false
+    default: "true"
+  benchmark:
+    description: "Run benchmarks"
+    required: false
+    default: "false"
+  upload-results:
+    description: "Upload test results as artifacts"
+    required: false
+    default: "true"
+  test-flags:
+    description: "Additional pytest flags"
+    required: false
+    default: ""
+  artifact-suffix:
+    description: "Additional suffix for artifact name to avoid conflicts"
+    required: false
+    default: ""
+
+outputs:
+  test-status:
+    description: "Test execution status"
+    value: ${{ steps.test-run.outputs.status }}
+  coverage-percentage:
+    description: "Coverage percentage (if coverage enabled)"
+    value: ${{ steps.coverage-check.outputs.percentage }}
+  test-report-path:
+    description: "Path to test report XML"
+    value: ${{ steps.test-run.outputs.report-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: 🧪 Run tests
+      id: test-run
+      shell: bash
+      run: |
+        # Prepare pytest command
+        PYTEST_CMD="uv run pytest"
+
+        # Add common flags
+        PYTEST_CMD="$PYTEST_CMD --tb=short"
+
+        # Add parallel execution flags
+        if [[ "${{ inputs.parallel }}" == "true" ]]; then
+          PYTEST_CMD="$PYTEST_CMD -n auto --dist worksteal"
+        fi
+
+        # Disable benchmarks unless requested
+        if [[ "${{ inputs.benchmark }}" != "true" ]]; then
+          PYTEST_CMD="$PYTEST_CMD --benchmark-disable"
+        fi
+
+        # Set up test report path
+        REPORT_NAME="pytest-${{ inputs.python-version }}-${{ inputs.os }}-${{ github.run_id }}.xml"
+        PYTEST_CMD="$PYTEST_CMD --junit-xml=reports/$REPORT_NAME"
+
+        # Add coverage flags if enabled
+        if [[ "${{ inputs.coverage-enabled }}" == "true" ]]; then
+          PYTEST_CMD="$PYTEST_CMD --cov=src/auto_release_note_generation"
+          PYTEST_CMD="$PYTEST_CMD --cov-report=term-missing:skip-covered"
+          PYTEST_CMD="$PYTEST_CMD --cov-report=xml:coverage.xml"
+          PYTEST_CMD="$PYTEST_CMD --cov-report=html:htmlcov"
+          PYTEST_CMD="$PYTEST_CMD --cov-report=json:coverage.json"
+          PYTEST_CMD="$PYTEST_CMD --cov-fail-under=${{ inputs.coverage-fail-under }}"
+          PYTEST_CMD="$PYTEST_CMD --cov-branch"
+        fi
+
+        # Add any additional flags
+        if [[ -n "${{ inputs.test-flags }}" ]]; then
+          PYTEST_CMD="$PYTEST_CMD ${{ inputs.test-flags }}"
+        fi
+
+        # Create reports directory
+        mkdir -p reports
+
+        # Run tests
+        echo "Running: $PYTEST_CMD"
+        if $PYTEST_CMD; then
+          echo "status=passed" >> $GITHUB_OUTPUT
+          echo "✅ Tests passed!"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Tests failed!"
+          exit 1
+        fi
+
+        echo "report-path=reports/$REPORT_NAME" >> $GITHUB_OUTPUT
+
+    - name: 📊 Process coverage
+      id: coverage-check
+      if: inputs.coverage-enabled == 'true' && always()
+      shell: bash
+      run: |
+        if [[ -f "coverage.json" ]]; then
+          # Extract coverage percentage
+          COVERAGE_PCT=$(python .github/scripts/get_coverage_percentage.py)
+          echo "percentage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
+
+          # Generate coverage summary
+          python .github/scripts/process_coverage.py
+        else
+          echo "percentage=0" >> $GITHUB_OUTPUT
+          echo "⚠️ No coverage data found"
+        fi
+
+    - name: 📤 Upload test results
+      if: always() && inputs.upload-results == 'true'
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      with:
+        name: test-results-${{ inputs.coverage-enabled == 'true' && 'coverage' || 'matrix' }}-${{ inputs.python-version }}-${{ inputs.os }}-${{ github.sha }}-${{ github.run_id }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}
+        path: |
+          reports/pytest-*.xml
+          coverage.xml
+          coverage.json
+          htmlcov/
+        retention-days: 7
+        if-no-files-found: ignore

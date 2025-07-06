@@ -21,9 +21,10 @@ authors = [
 # Main dependencies - pinned to major versions for compatibility
 dependencies = [
     "gitpython>=3.1.0,<4.0.0",                 # Git interaction library
+    "mcp>=1.10.1",                             # Model Context Protocol (security fix GHSA-j975-95f5-7wqh)
     "pydantic>=2.0.0,<3.0.0",                  # Data modeling and validation
     "pydantic-ai>=0.1.0,<1.0.0",               # Pydantic AI integration for AI-assisted features
-    "rich>=13.0.0,<14.0.0",                    # Rich terminal output for better CLI UX
+    "rich>=13.0.0,<15.0.0",                    # Rich terminal output for better CLI UX
     "urllib3>=2.5.0,<3.0.0",                   # HTTP library (pinned for security fix CVE-2025-50181, CVE-2025-50182)
 ]
 
@@ -64,10 +65,11 @@ dev = [
     "hypothesis>=6.0.0,<7.0.0",                # Property-based testing
 
     # Development tools
-    "pre-commit>=3.0.0,<4.0.0",                # Git hooks for quality checks
+    "pre-commit>=3.0.0,<5.0.0",                # Git hooks for quality checks
     "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
     "pip-audit>=2.5.0,<3.0.0",                 # Dependency vulnerability auditing
-    "bandit>=1.7.0,<2.0.0",                    # Security linting for Python code
+    "bandit[sarif]>=1.7.0,<2.0.0",             # Security linting for Python code with SARIF support
+    "cyclonedx-bom>=6.0.0,<7.0.0",             # Generate Software Bill of Materials (SBOM)
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
     # Jupyter notebook support (optional - only if using notebooks)
@@ -76,19 +78,19 @@ dev = [
 
 docs = [
     # Documentation generator and theme
-    "sphinx>=7.0.0,<8.0.0",                    # Documentation generator
+    "sphinx>=7.0.0,<9.0.0",                    # Documentation generator
     "furo>=2024.1.29,<2025.0.0",               # Modern Sphinx theme
 
     # Sphinx extensions and plugins
     "myst-parser>=2.0.0,<3.0.0",               # Markdown support for Sphinx
-    "sphinx-autodoc-typehints>=1.24.0,<2.0.0", # Better type hint docs
+    "sphinx-autodoc-typehints>=1.24.0,<4.0.0", # Better type hint docs
     "sphinx-pydantic>=0.1.0,<1.0.0",           # Pydantic model documentation
     "sphinx-autoapi>=3.0.0,<4.0.0",            # Auto-generate API docs
     "sphinx-copybutton>=0.5.0,<1.0.0",         # Copy code button
 ]
 
 perf = [
-    "pytest-benchmark>=4.0.0,<5.0.0",          # Performance benchmarking
+    "pytest-benchmark>=4.0.0,<6.0.0",          # Performance benchmarking
 ]
 
 all = [

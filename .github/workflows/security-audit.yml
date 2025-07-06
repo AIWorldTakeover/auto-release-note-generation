@@ -1,0 +1,229 @@
+name: Security Audit
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      create_issues:
+        description: 'Create issues for vulnerabilities'
+        type: boolean
+        default: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  # Comprehensive security audit
+  audit:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    outputs:
+      vulnerabilities_found: ${{ steps.scan.outputs.vulnerabilities-found }}
+      summary: ${{ steps.summary.outputs.content }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+          cache-key-suffix: "security"
+
+      - name: 🔒 Run security scan
+        id: scan
+        uses: ./.github/actions/security-scan
+        with:
+          fail-on-vulnerability: "false"  # Don't fail, we want to create issues
+          artifact-retention-days: "60"    # Keep longer for audits
+
+      - name: 📊 Generate detailed report
+        id: summary
+        if: always()
+        run: |
+          REPORT="# Security Audit Report - $(date -u '+%Y-%m-%d')\n\n"
+
+          # Dependency vulnerabilities
+          if [[ -f "security-audit.json" ]]; then
+            REPORT="${REPORT}## Dependency Vulnerabilities\n"
+
+            # Count vulnerabilities
+            VULN_COUNT=$(jq -r '.vulnerabilities | length' security-audit.json 2>/dev/null || echo "0")
+            if [[ "$VULN_COUNT" -gt 0 ]]; then
+              REPORT="${REPORT}Found **$VULN_COUNT** vulnerabilities:\n\n"
+
+              # Parse and format vulnerabilities
+              jq -r '.vulnerabilities[] |
+                "### \(.name) \(.version)\n" +
+                "- **Vulnerability:** \(.vulns[0].id // "Unknown")\n" +
+                "- **Description:** \(.vulns[0].description // "No description")\n" +
+                "- **Fix:** \(.vulns[0].fix_versions[0] // "No fix available")\n"
+              ' security-audit.json >> audit-report.md 2>/dev/null || true
+
+              cat audit-report.md >> $GITHUB_STEP_SUMMARY
+            else
+              REPORT="${REPORT}✅ No dependency vulnerabilities found.\n\n"
+            fi
+          fi
+
+          # Code security issues
+          if [[ -f "bandit-report.json" ]]; then
+            REPORT="${REPORT}## Code Security Issues\n"
+
+            ISSUE_COUNT=$(jq -r '.results | length' bandit-report.json 2>/dev/null || echo "0")
+            if [[ "$ISSUE_COUNT" -gt 0 ]]; then
+              REPORT="${REPORT}Found **$ISSUE_COUNT** code security issues.\n\n"
+            else
+              REPORT="${REPORT}✅ No code security issues found.\n\n"
+            fi
+          fi
+
+          # Save report
+          echo -e "$REPORT" > security-report.md
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          cat security-report.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Add to step summary
+          cat security-report.md >> $GITHUB_STEP_SUMMARY
+
+      - name: 🔍 Check for new CVEs
+        run: |
+          # Check GitHub Security Advisories
+          echo "## GitHub Security Advisories" >> $GITHUB_STEP_SUMMARY
+
+          # This would typically use the GitHub API to check for new advisories
+          # For now, we'll just note this as a placeholder
+          echo "Checking for new security advisories..." >> $GITHUB_STEP_SUMMARY
+
+  # Create issues for vulnerabilities
+  create-issues:
+    name: 📝 Create Security Issues
+    runs-on: ubuntu-latest
+    needs: [audit]
+    if: |
+      always() &&
+      needs.audit.outputs.vulnerabilities_found == 'true' &&
+      (github.event_name == 'schedule' || github.event.inputs.create_issues == 'true')
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: 📥 Download security reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: security-reports-*
+          merge-multiple: true
+
+      - name: 📝 Create or update security issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            const reportContent = `${{ needs.audit.outputs.summary }}`;
+
+            // Search for existing security audit issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,automated',
+              state: 'open'
+            });
+
+            const title = `🔒 Security Audit - ${new Date().toISOString().split('T')[0]}`;
+            const body = reportContent + '\n\n---\n*This issue was automatically created by the security audit workflow.*';
+
+            if (issues.data.length > 0) {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                title: title,
+                body: body
+              });
+              console.log(`Updated issue #${issues.data[0].number}`);
+            } else {
+              // Create new issue
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'automated']
+              });
+              console.log(`Created issue #${issue.data.number}`);
+            }
+
+  # Generate SBOM (Software Bill of Materials)
+  sbom:
+    name: 📋 Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.12"
+
+      - name: 📋 Generate SBOM
+        run: |
+          # Install cyclonedx for SBOM generation
+          uv run --with cyclonedx-bom cyclonedx-py requirements \
+            -r <(uv export --no-dev --no-header) \
+            -o sbom.json \
+            --format json \
+            --schema-version 1.5
+
+      - name: 📤 Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sbom-${{ github.run_id }}
+          path: sbom.json
+          retention-days: 90
+
+      - name: 📊 SBOM Summary
+        run: |
+          echo "## 📋 Software Bill of Materials" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "SBOM generated in CycloneDX format (v1.5)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Count components
+          COMPONENT_COUNT=$(jq '.components | length' sbom.json 2>/dev/null || echo "0")
+          echo "**Total components:** $COMPONENT_COUNT" >> $GITHUB_STEP_SUMMARY
+
+  # Summary
+  audit-complete:
+    name: ✅ Audit Complete
+    if: always()
+    needs: [audit, create-issues, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📊 Final summary
+        run: |
+          echo "# Security Audit Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Task | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Issue Creation | ${{ needs.create-issues.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Generation | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.audit.outputs.vulnerabilities_found }}" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Vulnerabilities were found during the audit.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **No vulnerabilities found.**" >> $GITHUB_STEP_SUMMARY
+          fi

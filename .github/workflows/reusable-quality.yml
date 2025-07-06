@@ -1,0 +1,210 @@
+name: Reusable Code Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version for quality checks'
+        required: false
+        type: string
+        default: '3.12'
+      skip-pre-commit:
+        description: 'Skip pre-commit hooks'
+        required: false
+        type: boolean
+        default: false
+      type-check-strict:
+        description: 'Fail on type checking errors'
+        required: false
+        type: boolean
+        default: false
+      docstring-coverage-threshold:
+        description: 'Minimum docstring coverage percentage'
+        required: false
+        type: number
+        default: 60
+      runner-size:
+        description: 'GitHub runner size'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    outputs:
+      quality-status:
+        description: 'Overall quality check status'
+        value: ${{ jobs.quality-check.outputs.status }}
+      type-check-passed:
+        description: 'Whether type checking passed'
+        value: ${{ jobs.quality-check.outputs.type-check-passed }}
+      lint-passed:
+        description: 'Whether linting passed'
+        value: ${{ jobs.quality-check.outputs.lint-passed }}
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality-check:
+    name: 📋 Code Quality Check
+    runs-on: ${{ inputs.runner-size }}
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+      type-check-passed: ${{ steps.type-check.outputs.passed }}
+      lint-passed: ${{ steps.lint.outputs.passed }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: 🐍 Setup Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache-key-suffix: quality
+
+      - name: 🎣 Run pre-commit hooks
+        if: ${{ !inputs.skip-pre-commit }}
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
+        with:
+          extra_args: --all-files --verbose
+        env:
+          SKIP: pytest-fast,pytest-full,mypy  # These run separately
+
+      - name: 🔍 Lint with Ruff
+        id: lint
+        run: |
+          echo "🔍 Running Ruff linter..."
+          LINT_FAILED=0
+
+          # Check code style and common issues
+          if ! uv run ruff check src/ tests/ --output-format=json > ruff-report.json; then
+            echo "❌ Ruff found issues:"
+            uv run ruff check src/ tests/ || true
+            LINT_FAILED=1
+          else
+            echo "✅ Ruff check passed"
+          fi
+
+          # Check formatting
+          if ! uv run ruff format --check src/ tests/; then
+            echo "❌ Code formatting issues found"
+            echo "Run 'uv run ruff format src/ tests/' to fix"
+            LINT_FAILED=1
+          else
+            echo "✅ Code formatting check passed"
+          fi
+
+          if [[ $LINT_FAILED -eq 0 ]]; then
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🧪 Type check with mypy
+        id: type-check
+        run: |
+          echo "🧪 Running mypy type checker..."
+
+          # Run mypy and capture exit code
+          if uv run mypy src/ tests/ \
+            --config-file pyproject.toml \
+            --junit-xml reports/mypy.xml \
+            --pretty \
+            --show-error-context; then
+            echo "✅ Type checking passed"
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Type checking found issues"
+            echo "passed=false" >> $GITHUB_OUTPUT
+
+            if [[ "${{ inputs.type-check-strict }}" == "true" ]]; then
+              echo "❌ Failing due to type errors (strict mode enabled)"
+              exit 1
+            fi
+          fi
+
+      - name: 📊 Check docstring coverage
+        id: docstring
+        run: |
+          echo "📊 Checking docstring coverage..."
+
+          mkdir -p docs/badges
+
+          # Run interrogate and capture results
+          uv run interrogate -v src/ \
+            --fail-under ${{ inputs.docstring-coverage-threshold }} \
+            --exclude "*/tests/*" \
+            --exclude "*/__init__.py" \
+            --ignore-init-method \
+            --ignore-magic \
+            --generate-badge docs/badges/ \
+            --badge-format svg \
+            --output interrogate-report.txt || DOCSTRING_FAILED=$?
+
+          # Display results
+          cat interrogate-report.txt || true
+
+          if [[ ${DOCSTRING_FAILED:-0} -ne 0 ]]; then
+            echo "⚠️ Docstring coverage below threshold"
+          else
+            echo "✅ Docstring coverage check passed"
+          fi
+
+      - name: 🔍 Complexity analysis
+        run: |
+          echo "🔍 Analyzing code complexity..."
+
+          # Install and run radon for complexity metrics
+          uv run --with radon radon cc src/ -a -nc --json > complexity-report.json || true
+          uv run --with radon radon mi src/ --json > maintainability-report.json || true
+
+          # Display summary
+          echo "### Complexity Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Average complexity and maintainability scores:" >> $GITHUB_STEP_SUMMARY
+          uv run --with radon radon cc src/ -a -nc || true
+
+      - name: 📋 Generate quality summary
+        id: summary
+        if: always()
+        run: |
+          echo "## 📋 Code Quality Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linting (Ruff) | ${{ steps.lint.outputs.passed == 'true' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type Checking (mypy) | ${{ steps.type-check.outputs.passed == 'true' && '✅ Passed' || '⚠️ Issues Found' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docstring Coverage | ${{ steps.docstring.outcome == 'success' && '✅ Passed' || '⚠️ Below Threshold' }} |" >> $GITHUB_STEP_SUMMARY
+
+          # Determine overall status
+          if [[ "${{ steps.lint.outputs.passed }}" == "true" ]] && \
+             [[ "${{ steps.type-check.outputs.passed }}" == "true" || "${{ inputs.type-check-strict }}" != "true" ]]; then
+            echo "status=passed" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Overall: Quality checks passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Overall: Quality checks failed**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📤 Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: quality-reports-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ruff-report.json
+            reports/mypy.xml
+            interrogate-report.txt
+            complexity-report.json
+            maintainability-report.json
+            docs/badges/
+          retention-days: 7
+          if-no-files-found: ignore

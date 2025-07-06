@@ -1,0 +1,126 @@
+name: 'Security Scan'
+description: 'Perform security scans including vulnerability audit, code security analysis, and SBOM generation'
+inputs:
+  source-directory:
+    description: 'Directory to scan for security issues'
+    required: false
+    default: 'src/'
+  output-directory:
+    description: 'Directory to store security scan results'
+    required: false
+    default: '.'
+  fail-on-issues:
+    description: 'Whether to fail the action if security issues are found'
+    required: false
+    default: 'true'
+  generate-sbom:
+    description: 'Whether to generate Software Bill of Materials (SBOM)'
+    required: false
+    default: 'true'
+
+outputs:
+  vulnerabilities-found:
+    description: 'Whether any vulnerabilities were found'
+    value: ${{ steps.security-check.outputs.vulnerabilities-found }}
+  pip-audit-status:
+    description: 'Status of pip-audit scan'
+    value: ${{ steps.security-check.outputs.pip-audit-status }}
+  bandit-status:
+    description: 'Status of bandit scan'
+    value: ${{ steps.security-check.outputs.bandit-status }}
+  secrets-status:
+    description: 'Status of detect-secrets scan'
+    value: ${{ steps.security-check.outputs.secrets-status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🔒 Run security audit
+      id: security-check
+      shell: bash
+      run: |
+        echo "🔒 Running strict security audits..."
+        SECURITY_FAILED=0
+
+        # Function to set output
+        set_output() {
+          echo "$1=$2" >> $GITHUB_OUTPUT
+        }
+        # Run pip-audit - fail on any vulnerability (except documented exclusions)
+        echo "📦 Checking for dependency vulnerabilities..."
+        # CVE-2022-42969 in py package - only affects Subversion operations we don't use
+        IGNORE_VULNS="--ignore-vuln PYSEC-2022-42969"
+        if ! uv run --with pip-audit pip-audit --desc --format json --output ${{ inputs.output-directory }}/security-audit.json $IGNORE_VULNS; then
+          echo "❌ FAILED: pip-audit found vulnerabilities"
+          cat ${{ inputs.output-directory }}/security-audit.json | jq -r '.vulnerabilities[] | "  - \(.name) \(.version): \(.vulns[].description)"' 2>/dev/null || true
+          set_output "pip-audit-status" "failed"
+          SECURITY_FAILED=1
+        else
+          echo "✅ pip-audit passed - no vulnerabilities found"
+          echo "  Note: Ignoring PYSEC-2022-42969 (py package) - documented in .pip-audit-exclusions.yaml"
+          set_output "pip-audit-status" "passed"
+        fi
+        # Run bandit - fail on medium+ severity issues
+        echo "🔍 Checking for code security issues..."
+        if ! uv run --with bandit bandit -r ${{ inputs.source-directory }} -ll -f json -o ${{ inputs.output-directory }}/bandit-report.json; then
+          echo "❌ FAILED: bandit found security issues (medium+ severity)"
+          cat ${{ inputs.output-directory }}/bandit-report.json | jq -r '.results[] | "  - \(.filename):\(.line_number) [\(.test_id)] \(.issue_text)"' 2>/dev/null || true
+          set_output "bandit-status" "failed"
+          SECURITY_FAILED=1
+        else
+          echo "✅ bandit passed - no security issues found"
+          set_output "bandit-status" "passed"
+        fi
+        # Check for secrets - strict mode
+        echo "🔑 Checking for exposed secrets..."
+        if ! uv run detect-secrets scan --baseline .secrets.baseline; then
+          echo "❌ FAILED: detect-secrets found potential secrets"
+          echo "  Run 'uv run detect-secrets audit .secrets.baseline' to review"
+          set_output "secrets-status" "failed"
+          SECURITY_FAILED=1
+        else
+          echo "✅ detect-secrets passed - no secrets detected"
+          set_output "secrets-status" "passed"
+        fi
+        # Generate SARIF reports for GitHub Security tab
+        echo "📊 Generating SARIF reports..."
+        uv run --with "bandit[sarif]>=1.7.0" bandit -r ${{ inputs.source-directory }} -f sarif -o ${{ inputs.output-directory }}/bandit.sarif || true
+
+        # Set overall status
+        if [ $SECURITY_FAILED -eq 1 ]; then
+          set_output "vulnerabilities-found" "true"
+          if [ "${{ inputs.fail-on-issues }}" == "true" ]; then
+            echo ""
+            echo "❌ Security audit failed! Please fix the issues above."
+            echo "💡 Tips:"
+            echo "  - For vulnerabilities: Update dependencies or add to exclusions if false positive"
+            echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
+            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"
+            exit 1
+          fi
+        else
+          set_output "vulnerabilities-found" "false"
+          echo ""
+          echo "✅ All security scans passed!"
+        fi
+    - name: 📋 Generate SBOM
+      if: inputs.generate-sbom == 'true'
+      shell: bash
+      run: |
+        echo "📋 Generating Software Bill of Materials (SBOM)..."
+        # Generate SBOM from the project dependencies
+        if [ -f "requirements.txt" ]; then
+          echo "📦 Generating SBOM from requirements.txt..."
+          uv run --with "cyclonedx-bom>=6.0.0" cyclonedx-py requirements requirements.txt \
+            --output-format json \
+            --output-file ${{ inputs.output-directory }}/sbom.json
+        else
+          echo "📦 Generating SBOM from uv dependencies..."
+          # Create a temporary requirements file from uv
+          uv pip freeze > temp_requirements.txt
+          uv run --with "cyclonedx-bom>=6.0.0" cyclonedx-py requirements temp_requirements.txt \
+            --output-format json \
+            --output-file ${{ inputs.output-directory }}/sbom.json
+          rm temp_requirements.txt
+        fi
+        echo "✅ SBOM generated successfully at ${{ inputs.output-directory }}/sbom.json"
