@@ -68,7 +68,8 @@ dev = [
     "pre-commit>=3.0.0,<4.0.0",                # Git hooks for quality checks
     "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
     "pip-audit>=2.5.0,<3.0.0",                 # Dependency vulnerability auditing
-    "bandit>=1.7.6,<2.0.0",                    # Security linting for Python code
+    "bandit[sarif]>=1.7.0,<2.0.0",             # Security linting for Python code with SARIF support
+    "cyclonedx-bom>=6.0.0,<7.0.0",             # Generate Software Bill of Materials (SBOM)
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
     # Jupyter notebook support (optional - only if using notebooks)
