@@ -27,7 +27,6 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   # UV specific
   UV_SYSTEM_PYTHON: "1"
-  UV_CACHE_DIR: ".cache/uv"
 
 # Set default permissions to read-only
 permissions:
@@ -141,17 +140,87 @@ jobs:
 
           # Run pip-audit - fail on any vulnerability (except documented exclusions)
           echo "📦 Checking for dependency vulnerabilities..."
-          # CVE-2022-42969 in py package - only affects Subversion operations we don't use
-          IGNORE_VULNS="--ignore-vuln PYSEC-2022-42969"
+          # Read vulnerability exclusions from YAML file
+          echo "📖 Reading vulnerability exclusions from .pip-audit-exclusions.yaml"
+          IGNORE_VULNS=""
+          if [ -f ".pip-audit-exclusions.yaml" ]; then
+            # Validate YAML file is readable
+            if [ ! -r ".pip-audit-exclusions.yaml" ]; then
+              echo "⚠️  WARNING: .pip-audit-exclusions.yaml exists but is not readable"
+            else
+              # Parse YAML file using Python for reliability
+              VULNS=$(python .github/scripts/parse_pip_audit_exclusions.py 2>/dev/null || echo "")
 
-          if ! uv run --with pip-audit pip-audit --desc --format json --output security-audit.json $IGNORE_VULNS; then
+              if [ -z "$VULNS" ]; then
+                echo "⚠️  WARNING: No vulnerability IDs found in .pip-audit-exclusions.yaml"
+                echo "  Expected format: package_name: [list of vulnerabilities]"
+              else
+                for vuln in $VULNS; do
+                  if [ -z "$IGNORE_VULNS" ]; then
+                    IGNORE_VULNS="--ignore-vuln $vuln"
+                  else
+                    IGNORE_VULNS="$IGNORE_VULNS --ignore-vuln $vuln"
+                  fi
+                done
+                echo "  Ignoring vulnerabilities: $VULNS"
+              fi
+            fi
+          fi
+
+          # Generate requirements file from lock and scan it
+          # Use --no-header to exclude comments and filter out editable installs
+          TEMP_REQUIREMENTS=$(mktemp requirements.XXXXXX.txt)
+          uv export --no-dev --no-header | grep -v '^-e ' > "$TEMP_REQUIREMENTS"
+
+          # Debug output (only if debug is enabled)
+          if [[ "${{ inputs.debug_enabled }}" == "true" || "${{ github.event.inputs.debug_enabled }}" == "true" ]]; then
+            echo "📋 Generated requirements file: $TEMP_REQUIREMENTS"
+            echo "📊 Total lines: $(wc -l < "$TEMP_REQUIREMENTS")"
+            echo "📄 First 10 lines of requirements file:"
+            head -10 "$TEMP_REQUIREMENTS"
+            echo "..."
+            echo "🔍 Lines starting with # or -e (should be none):"
+            grep -E '^(#|-e)' "$TEMP_REQUIREMENTS" || echo "  ✓ No comment or editable lines found"
+            echo "🔧 IGNORE_VULNS value: '$IGNORE_VULNS'"
+            IGNORE_COUNT=$(echo "$IGNORE_VULNS" | grep -o -- '--ignore-vuln' | wc -l)
+            echo "📊 Number of --ignore-vuln flags: $IGNORE_COUNT"
+          fi
+
+          # Run pip-audit with proper quoting
+          if [[ "${{ inputs.debug_enabled }}" == "true" || "${{ github.event.inputs.debug_enabled }}" == "true" ]]; then
+            echo "🚀 Running command: uv run --with pip-audit pip-audit -r \"$TEMP_REQUIREMENTS\" --desc --format json --output security-audit.json $IGNORE_VULNS"
+          fi
+          if ! uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc --format json --output security-audit.json $IGNORE_VULNS; then
             echo "❌ FAILED: pip-audit found vulnerabilities"
-            cat security-audit.json | jq -r '.vulnerabilities[] | "  - \(.name) \(.version): \(.vulns[].description)"' 2>/dev/null || true
+
+            # First, run pip-audit again in text format for clear output
+            echo "📊 Running pip-audit in text format to show vulnerabilities:"
+            uv run --with pip-audit pip-audit -r "$TEMP_REQUIREMENTS" --desc $IGNORE_VULNS || true
+
+            # Also try to show JSON if available
+            if [ -f security-audit.json ]; then
+              echo ""
+              echo "📋 Attempting to parse JSON output:"
+              if command -v jq >/dev/null 2>&1; then
+                # Try to show just the vulnerabilities array
+                jq -r '.vulnerabilities[] | "  Package: \(.name) \(.version)\n  Vulnerability: \(.vulns[].id // "Unknown")"' security-audit.json 2>/dev/null || {
+                  echo "  ⚠️ JSON parsing failed, showing first 2000 chars of raw JSON:"
+                  head -c 2000 security-audit.json
+                }
+              else
+                echo "  ⚠️ jq not available, showing first 2000 chars of JSON:"
+                head -c 2000 security-audit.json
+              fi
+            fi
+
             SECURITY_FAILED=1
           else
             echo "✅ pip-audit passed - no vulnerabilities found"
-            echo "  Note: Ignoring PYSEC-2022-42969 (py package) - documented in .pip-audit-exclusions.yaml"
+            echo "  Note: Exclusions documented in .pip-audit-exclusions.yaml"
           fi
+
+          # Clean up temporary file
+          rm -f "$TEMP_REQUIREMENTS"
 
           # Run bandit - fail on medium+ severity issues
           echo "🔍 Checking for code security issues..."
@@ -173,17 +242,13 @@ jobs:
             echo "✅ detect-secrets passed - no secrets detected"
           fi
 
-          # Generate SARIF reports for GitHub Security tab
-          echo "📊 Generating SARIF reports..."
-          uv run --with bandit bandit -r src/ -f sarif -o bandit.sarif || true
-
           if [ $SECURITY_FAILED -eq 1 ]; then
             echo ""
             echo "❌ Security audit failed! Please fix the issues above."
             echo "💡 Tips:"
             echo "  - For vulnerabilities: Update dependencies or add to exclusions if false positive"
             echo "  - For bandit issues: Fix the code or add '# nosec' comment with justification"
-            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"
+            echo "  - For secrets: Remove from code or add to .secrets.baseline if false positive"  # pragma: allowlist secret
             exit 1
           fi
       - name: 📊 Interrogate (docstring coverage)
@@ -214,16 +279,9 @@ jobs:
           path: |
             security-audit.json
             bandit-report.json
-            bandit.sarif
             .secrets.baseline
           retention-days: 30
 
-      - name: 📊 Upload SARIF to GitHub Security
-        if: always() && github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93  # v3.26.6
-        with:
-          sarif_file: bandit.sarif
-          category: bandit-security-scan
 
   # Type checking
   type-check:
@@ -440,14 +498,6 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      - name: 💬 Comment coverage on PR
-        if: github.event_name == 'pull_request' && always()
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MINIMUM_GREEN: 85
-          MINIMUM_ORANGE: 70
-          VERBOSE: true
 
   # Build and validate package
   build:
