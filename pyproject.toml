@@ -85,7 +85,7 @@ docs = [
     "furo>=2024.1.29,<2025.0.0",               # Modern Sphinx theme
 
     # Sphinx extensions and plugins
-    "myst-parser>=2.0.0,<3.0.0",               # Markdown support for Sphinx
+    "myst-parser>=2.0.0,<5.0.0",               # Markdown support for Sphinx
     "sphinx-autodoc-typehints>=1.24.0,<4.0.0", # Better type hint docs
     "sphinx-pydantic>=0.1.0,<1.0.0",           # Pydantic model documentation
     "sphinx-autoapi>=3.0.0,<4.0.0",            # Auto-generate API docs
