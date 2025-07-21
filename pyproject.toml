@@ -69,7 +69,7 @@ dev = [
     "detect-secrets>=1.5.0,<2.0.0",            # Security secrets detection
     "pip-audit>=2.5.0,<3.0.0",                 # Dependency vulnerability auditing
     "bandit[sarif]>=1.7.0,<2.0.0",             # Security linting for Python code with SARIF support
-    "cyclonedx-bom>=6.0.0,<7.0.0",             # Generate Software Bill of Materials (SBOM)
+    "cyclonedx-bom>=6.0.0,<8.0.0",             # Generate Software Bill of Materials (SBOM)
     "interrogate>=1.7.0,<2.0.0",               # Docstring coverage checking
 
     # Jupyter notebook support
